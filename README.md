@@ -3,6 +3,9 @@ piMythclient
 
 Experimental Mythclient for running on a raspberry pi
 This is very experimental an under heavy development so it might not work because some part is being tested and developed.
+It only works with myth version 0.26
+
+Prerequisite: Compiled ffmpeg. Please follow guide on http://ffmpeg.org/trac/ffmpeg/wiki/How%20to%20compile%20FFmpeg%20for%20Raspberry%20Pi%20%28Raspbian%29
 
 To compile on the pi do "make pi"
 
