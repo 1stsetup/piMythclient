@@ -131,5 +131,6 @@ OMX_ERRORTYPE omxSetAudioDestination(struct OMX_COMPONENT_T *component, const ch
 OMX_ERRORTYPE omxSetAudioClockAsSourceReference(struct OMX_COMPONENT_T *component, int clockReferenceSource);
 OMX_ERRORTYPE omxSetAudioPassthrough(struct OMX_COMPONENT_T *component, int passthrough);
 OMX_ERRORTYPE omxShowAudioPortFormat(struct OMX_COMPONENT_T *component, unsigned int port);
+OMX_ERRORTYPE omxSetAudioRenderInput(struct OMX_COMPONENT_T *component, int sample_rate, int bits_per_coded_sample, int channels);
 
 #endif

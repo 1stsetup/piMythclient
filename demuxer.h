@@ -8,6 +8,8 @@
 #include <libavutil/dict.h>
 #include <libavformat/avio.h>
 #include <libavutil/audioconvert.h>
+#include <libswresample/swresample.h>
+#include <libavutil/opt.h>
 
 #ifndef FFMPEG_FILE_BUFFER_SIZE
 #define FFMPEG_FILE_BUFFER_SIZE   32768 // default reading size for ffmpeg
@@ -72,6 +74,7 @@ struct DEMUXER_T{
 	int showVideo;
 	int playAudio;
 	int audioPassthrough;
+	int swDecodeAudio;
 
 	int videoPortSettingChanged;
 	int audioPortSettingChanged;

@@ -232,6 +232,7 @@ int mythAnnPlayback(struct MYTH_CONNECTION_T *mythConnection)
 	char *hostname = malloc(MAX_HOSTNAME_LEN+1);
 
 	if (gethostname(hostname, MAX_HOSTNAME_LEN) != 0) {
+		free(hostname);
 		error = -1;
 	}
 
@@ -259,6 +260,7 @@ int mythAnnMonitor(struct MYTH_CONNECTION_T *mythConnection)
 	char *hostname = malloc(MAX_HOSTNAME_LEN+1);
 
 	if (gethostname(hostname, MAX_HOSTNAME_LEN) != 0) {
+		free(hostname);
 		error = -1;
 	}
 
@@ -286,7 +288,8 @@ int mythAnnFileTransfer(struct MYTH_CONNECTION_T *mythConnection)
         char *hostname = malloc(MAX_HOSTNAME_LEN+1);
 
         if (gethostname(hostname, MAX_HOSTNAME_LEN) != 0) {
-                error = -1;
+                free(hostname);
+               error = -1;
         }
 
         if (error >= 0) {
@@ -613,7 +616,7 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 	char	response[RESPONSESIZE];
 	char 	command[MAX_COMMAND_LENGTH];
 	int 	error = 0;
-	char	*chainId;
+	char	*chainId = NULL;
 	struct LISTITEM_T *tmpList;
 
 	if (error >= 0) {
@@ -673,6 +676,11 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 		result->currentRecording = mythGetCurrentRecording(result);
 		logInfo( LOG_MYTHPROTOCOL,"startLiveTV: mythGetCurrentRecording: %d items in list.\n",listCount(result->currentRecording));
 	}
+
+	if (chainId != NULL) {
+		free(chainId);
+	}
+
 	if (error >= 0) {
 		return result;
 	}

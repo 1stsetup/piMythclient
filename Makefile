@@ -1,6 +1,6 @@
 OBJS=globalFunctions.o lists.o omxVideo.o demuxer.o connection.o mythProtocol.o osd.o  bcm.o vcos.o tvservice.o client.o
 BIN=piMythClient
-LDFLAGS+=-luuid -lavformat -lavcodec -lavutil -pthread -lz -lx264 -laacplus -lm -lbz2 -lrt
+LDFLAGS+=-luuid -lavformat -lavcodec -lavutil -lswresample -pthread -lz -lx264 -laacplus -lm -lbz2 -lrt
 CFLAGS+=-Wall 
 INCLUDES+=
 

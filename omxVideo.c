@@ -833,6 +833,61 @@ OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *c
 	return omxErr;
 }
 
+OMX_ERRORTYPE omxSetAudioRenderInput(struct OMX_COMPONENT_T *component, int sample_rate, int bits_per_coded_sample, int channels)
+{
+	OMX_ERRORTYPE omxErr;
+
+	OMX_AUDIO_PARAM_PCMMODETYPE pcmInput;
+
+	OMX_INIT_STRUCTURE(pcmInput);
+	pcmInput.nPortIndex = component->inputPort;
+
+	pcmInput.eNumData		= OMX_NumericalDataSigned;
+	pcmInput.eEndian		= OMX_EndianLittle;
+	pcmInput.bInterleaved		= OMX_TRUE;
+	pcmInput.nBitPerSample		= bits_per_coded_sample;
+	pcmInput.ePCMMode		= OMX_AUDIO_PCMModeLinear;
+	pcmInput.nChannels		= channels;
+	pcmInput.nSamplingRate		= sample_rate;
+	pcmInput.eChannelMapping[0]	= OMX_AUDIO_ChannelLF;
+	pcmInput.eChannelMapping[1]	= OMX_AUDIO_ChannelRF;
+
+	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamAudioPcm, &pcmInput);
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error SetParameter OMX_IndexParamAudioPcm for port %d status on component %s omxErr(0x%08x)\n", component->inputPort, component->componentName, (int)omxErr);
+		return omxErr;
+	}
+
+	OMX_AUDIO_PARAM_PORTFORMATTYPE formatType;
+	OMX_INIT_STRUCTURE(formatType);
+	formatType.nPortIndex = component->inputPort;
+
+	formatType.eEncoding = OMX_AUDIO_CodingPCM;
+
+	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamAudioPortFormat, &formatType);
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error SetParameter OMX_IndexParamAudioPortFormat for port %d status on component %s omxErr(0x%08x)\n", component->inputPort, component->componentName, (int)omxErr);
+		return omxErr;
+	}
+
+	OMX_PARAM_PORTDEFINITIONTYPE portDef;
+	OMX_INIT_STRUCTURE(portDef);
+	portDef.nPortIndex = component->inputPort;
+
+	portDef.format.audio.eEncoding = OMX_AUDIO_CodingPCM;
+
+	portDef.nBufferSize = ((6144 * 2) + 15) & ~15;
+	portDef.nBufferCountActual = 60;
+
+	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamPortDefinition, &portDef);
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error SetParameter OMX_IndexParamPortDefinition for port %d status on component %s omxErr(0x%08x)\n", component->inputPort, component->componentName, (int)omxErr);
+		return omxErr;
+	}
+
+	return OMX_ErrorNone;
+}
+
 OMX_ERRORTYPE omxSetAudioCompressionFormatAndBuffer(struct OMX_COMPONENT_T *component, enum AVCodecID codec, 
 				int sample_rate, int bits_per_coded_sample, int channels, int audioPassthrough)
 {
@@ -895,6 +950,7 @@ OMX_ERRORTYPE omxSetAudioCompressionFormatAndBuffer(struct OMX_COMPONENT_T *comp
 		formatType.nPortIndex = component->inputPort;
 
 		formatType.eEncoding = encoding;
+		formatType.nIndex = 0;	
 
 		omxErr = OMX_SetParameter(component->handle, OMX_IndexParamAudioPortFormat, &formatType);
 		if(omxErr != OMX_ErrorNone) {
@@ -1023,6 +1079,7 @@ OMX_ERRORTYPE omxSetAudioVolume(struct OMX_COMPONENT_T *component, long volume)
 	OMX_INIT_STRUCTURE(volumeConfig);
 	volumeConfig.nPortIndex = component->inputPort;
 
+	volumeConfig.bLinear = OMX_TRUE;
 	volumeConfig.sVolume.nValue = volume;
 
 	omxErr = OMX_SetConfig(component->handle, OMX_IndexConfigAudioVolume, &volumeConfig);

@@ -72,7 +72,7 @@ int main(int argc, char *argv[])
 	uint32_t currentChannel = 0;
 	int doStop = 0;
 	int channelChanged = 0;
-	int audioPassthrough = 0;
+	int audioPassthrough = 1;
 	int showVideo = 1;
 	int playAudio = 1;
 

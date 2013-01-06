@@ -155,14 +155,21 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 	logInfo( LOG_CONNECTION_DEBUG,"fillBuffer: Buffer is ready. bufferEnd=%d, bufferPos=%d, bufferLen=%d.\n", connection->bufferEnd, connection->bufferPos, connection->bufferLen);
 
 	// Add new received data to connection buffer
-	unsigned int responsePos = 0;
+/*	unsigned int responsePos = 0;
 	char *tmpBuffer;
 	while (responsePos < readLen) {
 		tmpBuffer = connection->buffer + connection->bufferEnd;
 		*tmpBuffer = response[responsePos];
 		responsePos++;
 		connection->bufferEnd++;
-	}
+	}*/
+
+	char *tmpBuffer;
+	tmpBuffer = connection->buffer + connection->bufferEnd;
+	memcpy(tmpBuffer, response, readLen);
+	connection->bufferEnd += readLen;
+	
+	free(response);
 
 	logInfo( LOG_CONNECTION_DEBUG,"fillBuffer: new Buffer=%s.\n", connection->buffer);
 	logInfo( LOG_CONNECTION_DEBUG,"fillBuffer: Buffer details. bufferEnd=%d, bufferPos=%d, bufferLen=%d.\n", connection->bufferEnd, connection->bufferPos, connection->bufferLen);
@@ -179,23 +186,31 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 unsigned long long int readConnectionBuffer(struct CONNECTION_T *connection, char *dstBuffer, int len)
 {
 	unsigned long long int rlen = len;
-	char *tmpBuffer = connection->buffer + connection->bufferPos;
+//	char *tmpBuffer = connection->buffer + connection->bufferPos;
 
-	char *tmpOutBuffer = dstBuffer;
+//	char *tmpOutBuffer = dstBuffer;
 
 	pthread_mutex_lock(&connection->readWriteLock);
 
-	while ((rlen > 0) && (connection->bufferPos < connection->bufferEnd)) {
+/*	while ((rlen > 0) && (connection->bufferPos < connection->bufferEnd)) {
 		tmpBuffer = connection->buffer + connection->bufferPos;
 		*tmpOutBuffer = *tmpBuffer;
 		rlen--;
 		connection->bufferPos++;
 		tmpOutBuffer++;
 	}
+*/
+	char *tmpBuffer = connection->buffer + connection->bufferPos;
+
+	if (getConnectionDataLen(connection) < len) {
+		rlen = getConnectionDataLen(connection);
+	}
+	memcpy(dstBuffer, tmpBuffer, rlen);
+	connection->bufferPos += rlen;
 
 	pthread_mutex_unlock(&connection->readWriteLock);
 
-	return (len - rlen);
+	return rlen;
 }
 
 void destroyConnection(struct CONNECTION_T *connection)

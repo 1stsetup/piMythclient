@@ -23,4 +23,6 @@ To run do:
 * -e 0|1 "Set audio passthrough on. Decoding is done externally. Default 1 (on)"
 
 It will currently use hdmi as audio and video output.
-Audio is currently not yet working.
+** For video currently only H264 is supported. 
+** Audio is working but it is decoded in software and converted to stereo in software.
+Still working on trying to get it decoded in hardware.

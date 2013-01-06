@@ -97,6 +97,16 @@ int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize
 	ssize_t receivedLen = fillConnectionBuffer(demuxer->mythConnection->transferConnection->connection, readLen, 1);
 	logInfo( LOG_DEMUXER_DEBUG,"Connection buffer was filled with %zd bytes of the requested %zd.\n", receivedLen, readLen);
 
+	struct timespec interval;
+	struct timespec remainingInterval;
+
+	while (getConnectionDataLen(demuxer->mythConnection->transferConnection->connection) < bufferSize) {
+		interval.tv_sec = 0;
+		interval.tv_nsec = 10;
+
+		nanosleep(&interval, &remainingInterval);
+	}
+
 	ssize_t readBufferLen = 0;
 	while (readBufferLen == 0) {
 		readBufferLen = readConnectionBuffer(demuxer->mythConnection->transferConnection->connection, (char *)buffer, receivedLen);
@@ -259,7 +269,14 @@ int playAudioPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 	while(demuxer_bytes) {
 		// 200ms timeout
 		logInfo(LOG_DEMUXER_DEBUG, "demuxer_bytes=%d. Before omxGetInputBuffer\n", demuxer_bytes);
-		OMX_BUFFERHEADERTYPE *omx_buffer = omxGetInputBuffer(demuxer->audioDecoder, 200);
+		OMX_BUFFERHEADERTYPE *omx_buffer;
+		if (demuxer->swDecodeAudio == 0) {
+			omx_buffer = omxGetInputBuffer(demuxer->audioDecoder, 200);
+		}
+		else {
+			omx_buffer = omxGetInputBuffer(demuxer->audioRender, 200);
+		}
+
 		logInfo(LOG_DEMUXER_DEBUG, "demuxer_bytes=%d. After omxGetInputBuffer\n", demuxer_bytes);
 		if(omx_buffer == NULL)
 		{
@@ -298,51 +315,59 @@ int playAudioPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 		if(demuxer_bytes == 0)
 			omx_buffer->nFlags |= OMX_BUFFERFLAG_ENDOFFRAME;
 
-		if ((demuxer->audioPortSettingChanged == 0) && (omxWaitForEvent(demuxer->audioDecoder, OMX_EventPortSettingsChanged, demuxer->audioDecoder->outputPort, 0) == OMX_ErrorNone)) {
+		if (demuxer->swDecodeAudio == 0) {
+			if ((demuxer->audioPortSettingChanged == 0) && (omxWaitForEvent(demuxer->audioDecoder, OMX_EventPortSettingsChanged, demuxer->audioDecoder->outputPort, 0) == OMX_ErrorNone)) {
 
-			demuxer->audioPortSettingChanged = 1;
+				demuxer->audioPortSettingChanged = 1;
 
-			logInfo(LOG_DEMUXER_DEBUG, "demuxer->audioPortSettingChanged set to true.\n");
+				logInfo(LOG_DEMUXER_DEBUG, "demuxer->audioPortSettingChanged set to true.\n");
 
-			if (demuxer->audioPassthrough == 0) {
-				omxErr = omxEstablishTunnel(demuxer->audioDecoderToMixerTunnel);
-				if(omxErr != OMX_ErrorNone) {
-					logInfo(LOG_DEMUXER, "Error establishing tunnel between audio decoder and audio mixer components. (Error=0x%08x).\n", omxErr);
-					av_free_packet(packet);
-					return 1;
+				if (demuxer->audioPassthrough == 0) {
+					omxErr = omxEstablishTunnel(demuxer->audioDecoderToMixerTunnel);
+					if(omxErr != OMX_ErrorNone) {
+						logInfo(LOG_DEMUXER, "Error establishing tunnel between audio decoder and audio mixer components. (Error=0x%08x).\n", omxErr);
+						av_free_packet(packet);
+						return 1;
+					}
+
+					omxErr = omxSetStateForComponent(demuxer->audioMixer, OMX_StateExecuting);
+					if (omxErr != OMX_ErrorNone)
+					{
+						logInfo(LOG_DEMUXER, "audio mixer SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
+						return omxErr;
+					}
+				}
+				else {
+					omxShowAudioPortFormat(demuxer->audioDecoder, demuxer->audioDecoder->outputPort);
+					omxShowAudioPortFormat(demuxer->audioRender, demuxer->audioRender->inputPort);
+
+					omxErr = omxEstablishTunnel(demuxer->audioDecoderToRenderTunnel);
+					if(omxErr != OMX_ErrorNone) {
+						logInfo(LOG_DEMUXER, "Error establishing tunnel between audio decoder and audio render components. (Error=0x%08x).\n", omxErr);
+						return omxErr;
+					}
 				}
 
-				omxErr = omxSetStateForComponent(demuxer->audioMixer, OMX_StateExecuting);
+
+				omxErr = omxSetStateForComponent(demuxer->audioRender, OMX_StateExecuting);
 				if (omxErr != OMX_ErrorNone)
 				{
-					logInfo(LOG_DEMUXER, "audio mixer SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
+					logInfo(LOG_DEMUXER, "audio render SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
 					return omxErr;
 				}
-			}
-			else {
-				omxShowAudioPortFormat(demuxer->audioDecoder, demuxer->audioDecoder->outputPort);
-				omxShowAudioPortFormat(demuxer->audioRender, demuxer->audioRender->inputPort);
-
-				omxErr = omxEstablishTunnel(demuxer->audioDecoderToRenderTunnel);
-				if(omxErr != OMX_ErrorNone) {
-					logInfo(LOG_DEMUXER, "Error establishing tunnel between audio decoder and audio render components. (Error=0x%08x).\n", omxErr);
-					return omxErr;
-				}
-			}
-
-
-			omxErr = omxSetStateForComponent(demuxer->audioRender, OMX_StateExecuting);
-			if (omxErr != OMX_ErrorNone)
-			{
-				logInfo(LOG_DEMUXER, "audio render SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
-				return omxErr;
 			}
 		}
 
 		int nRetry = 0;
 		while(1 == 1) {
 			logInfo(LOG_DEMUXER_DEBUG, "demuxer_bytes=%d. Before OMX_EmptyThisBuffer\n", demuxer_bytes);
-			omxErr = OMX_EmptyThisBuffer(demuxer->audioDecoder->handle, omx_buffer);
+
+			if (demuxer->swDecodeAudio == 0) {
+				omxErr = OMX_EmptyThisBuffer(demuxer->audioDecoder->handle, omx_buffer);
+			}
+			else {
+				omxErr = OMX_EmptyThisBuffer(demuxer->audioRender->handle, omx_buffer);
+			}
 			logInfo(LOG_DEMUXER_DEBUG, "demuxer_bytes=%d. after OMX_EmptyThisBuffer\n", demuxer_bytes);
 			if (omxErr == OMX_ErrorNone) {
 				break;
@@ -360,7 +385,7 @@ int playAudioPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 
 	}
 
-	av_free_packet(packet);
+//	av_free_packet(packet);
 	return 1;
 #endif
 }
@@ -385,7 +410,10 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 		                                 , &got_frame
 		                                 , &avpkt);
 
-	logInfo(LOG_DEMUXER, "Decoded packet. iBytesUsed=%d from packet.size=%d.\n", iBytesUsed, inPacket->size);
+
+	logInfo(LOG_DEMUXER_DEBUG, "Decoded packet. iBytesUsed=%d from packet.size=%d.\n", iBytesUsed, inPacket->size);
+
+	logInfo(LOG_DEMUXER_DEBUG, "frame1->format=%d, demuxer->audioCodecContext->sample_fmt=%d, demuxer->audioCodecContext->sample_rate=%d.\n", frame1->format, demuxer->audioCodecContext->sample_fmt,demuxer->audioCodecContext->sample_rate);
 
 	if (!got_frame) {
 		logInfo(LOG_DEMUXER, "Did not have a full frame in the packet.\n");
@@ -406,7 +434,7 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 	}
 
 	m_iBufferSize1 = av_samples_get_buffer_size(NULL, demuxer->audioCodecContext->channels, frame1->nb_samples, demuxer->audioCodecContext->sample_fmt, 1);
-	logInfo(LOG_DEMUXER, "m_iBufferSize1=%d.\n", m_iBufferSize1);
+	logInfo(LOG_DEMUXER_DEBUG, "decoded: m_iBufferSize1=%d, frame1->nb_samples=%d\n", m_iBufferSize1, frame1->nb_samples);
 
 	/* some codecs will attempt to consume more data than what we gave */
 	if (iBytesUsed > inPacket->size)
@@ -415,55 +443,60 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 		iBytesUsed = inPacket->size;
 	}
 
-	fwrite(frame1->data[0], 1, m_iBufferSize1, demuxer->outfile);
+//	fwrite(frame1->data[0], 1, m_iBufferSize1, demuxer->outfile);
 
-/*	if(m_iBufferSize1 == 0 && iBytesUsed >= 0)
-		m_iBuffered += iBytesUsed;
-	else
-		m_iBuffered = 0;
-*/
-/*	AVAudioConvert* m_pConvert = NULL;
-	enum AVSampleFormat m_iSampleFormat;
-	char *m_pBuffer2;
+	// Conversion to 2 channel AV_SAMPLE_FMT_S16 is done in software. Could be done in hw using a decoder and mixer probably
+	SwrContext *swr = swr_alloc();
 
-	if(demuxer->audioCodecContext->sample_fmt != AV_SAMPLE_FMT_S16 && m_iBufferSize1 > 0) {
-
-		logInfo(LOG_DEMUXER, "Audio data is not AV_SAMPLE_FMT_S16. Going to convert.\n");
-
-		m_iSampleFormat = demuxer->audioCodecContext->sample_fmt;
-		m_pConvert = av_audio_convert_alloc(AV_SAMPLE_FMT_S16, 1, demuxer->audioCodecContext->sample_fmt, 1, NULL, 0);
-
-		if(!m_pConvert) {
-			logInfo(LOG_DEMUXER, "Unable to alloc memory needed for conversion.\n");
-			m_iBufferSize1 = 0;
-			m_iBufferSize2 = 0;
-			return iBytesUsed;
-		}
-
-		const void *ibuf[6] = { frame1->data[0] };
-		void       *obuf[6] = { m_pBuffer2 };
-		int         istr[6] = { av_get_bytes_per_sample(demuxer->audioCodecContext->sample_fmt) };
-		int         ostr[6] = { 2 };
-		int         len     = m_iBufferSize1 / istr[0];
-		if(av_audio_convert(m_pConvert, obuf, ostr, ibuf, istr, len) < 0) {
-			logInfo(LOG_DEMUXER, "Unable to convert %d to AV_SAMPLE_FMT_S16", demuxer->audioCodecContext->sample_fmt);
-			m_iBufferSize1 = 0;
-			m_iBufferSize2 = 0;
-			return iBytesUsed;
-		}
-
-		m_iBufferSize1 = 0;
-		m_iBufferSize2 = len * ostr[0];
-		logInfo(LOG_DEMUXER, "Convert to right audio format. Data size m_iBufferSize2 = %d.\n", m_iBufferSize2);
-	}
-	else {
-		logInfo(LOG_DEMUXER, "Audio data is AV_SAMPLE_FMT_S16. No conversion required.\n");
+	av_opt_set_int(swr, "in_channel_layout", demuxer->audioCodecContext->channel_layout /*AV_CH_LAYOUT_5POINT1*/, 0);
+//	av_opt_set_int(swr, "in_channel_layout", AV_CH_LAYOUT_5POINT1, 0);
+	av_opt_set_int(swr, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0); // For now we do stereo.
+	av_opt_set_int(swr, "in_sample_rate", demuxer->audioCodecContext->sample_rate, 0);
+	av_opt_set_int(swr, "out_sample_rate", demuxer->audioCodecContext->sample_rate, 0);
+	av_opt_set_sample_fmt(swr, "in_sample_fmt", frame1->format, 0);
+	av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+	if (swr_init(swr) < 0) {
+		logInfo(LOG_DEMUXER, "Error swr_init.\n");
+		return 0;
 	}
 
-	av_audio_convert_free(m_pConvert);
-*/	avcodec_free_frame(&frame1);
+	uint8_t *output;
+	int in_samples = frame1->nb_samples;
+logInfo(LOG_DEMUXER_DEBUG, "Hier a.\n");
+	int out_samples = av_rescale_rnd(swr_get_delay(swr, demuxer->audioCodecContext->sample_rate) + in_samples, demuxer->audioCodecContext->sample_rate, demuxer->audioCodecContext->sample_rate, AV_ROUND_UP);
+logInfo(LOG_DEMUXER_DEBUG, "Hier b.\n");
+	av_samples_alloc(&output, NULL, 2, out_samples,	AV_SAMPLE_FMT_S16, 0);
+logInfo(LOG_DEMUXER_DEBUG, "Hier c.\n");
+	out_samples = swr_convert(swr, &output, out_samples, (const uint8_t **)&frame1->data[0], in_samples);
+logInfo(LOG_DEMUXER_DEBUG, "Hier d.\n");
+	if (out_samples < 0) {
+		logInfo(LOG_DEMUXER, "Error swr_convert.\n");
+		return 0;
+	}
 
-	return playAudioPacket(demuxer, inPacket, pts);
+logInfo(LOG_DEMUXER_DEBUG, "Hier e.\n");
+	m_iBufferSize1 = av_samples_get_buffer_size(NULL, 2, out_samples, AV_SAMPLE_FMT_S16, 1);
+logInfo(LOG_DEMUXER_DEBUG, "Hier f.\n");
+	logInfo(LOG_DEMUXER_DEBUG, "converted: m_iBufferSize1=%d, out_samples=%d\n", m_iBufferSize1, out_samples);
+logInfo(LOG_DEMUXER_DEBUG, "Hier g.\n");
+	fwrite(output, 1, m_iBufferSize1, demuxer->outfile);
+logInfo(LOG_DEMUXER_DEBUG, "Hier h.\n");
+
+	av_init_packet(&avpkt);
+	avpkt.data = output;
+	avpkt.size = m_iBufferSize1;
+
+logInfo(LOG_DEMUXER_DEBUG, "Hier i.\n");
+	int ret = playAudioPacket(demuxer, &avpkt, pts);
+logInfo(LOG_DEMUXER_DEBUG, "Hier j.\n");
+
+	av_freep(&output);
+
+	avcodec_free_frame(&frame1);
+
+	av_free_packet(inPacket);
+
+	return ret;
 }
 
 double ffmpegConvertTimestamp(struct DEMUXER_T *demuxer, int64_t pts, AVRational *time_base)
@@ -613,20 +646,22 @@ OMX_ERRORTYPE demuxerInitOMXAudio(struct DEMUXER_T *demuxer)
 
 	if (demuxer->audioStream > -1) {
 
-		demuxer->audioDecoder = omxCreateComponent("OMX.broadcom.audio_decode" , OMX_IndexParamAudioInit);
-		if (demuxer->audioDecoder == NULL) {
-			logInfo(LOG_DEMUXER, "Error creating OMX audio decoder component. (Error=0x%08x).\n", omx_error);
-			return omx_error;
-		}
-		logInfo(LOG_DEMUXER_DEBUG, "Created OMX audio decoder component.\n");
+		if (demuxer->swDecodeAudio == 0) {
+			demuxer->audioDecoder = omxCreateComponent("OMX.broadcom.audio_decode" , OMX_IndexParamAudioInit);
+			if (demuxer->audioDecoder == NULL) {
+				logInfo(LOG_DEMUXER, "Error creating OMX audio decoder component. (Error=0x%08x).\n", omx_error);
+				return omx_error;
+			}
+			logInfo(LOG_DEMUXER_DEBUG, "Created OMX audio decoder component.\n");
 
-		omxErr = omxSetAudioPassthrough(demuxer->audioDecoder, demuxer->audioPassthrough);
-		if (omxErr != OMX_ErrorNone)
-		{
-			logInfo(LOG_DEMUXER, "audio render omxSetAudioClockAsSourceReference. (Error=0x%08x).\n", omxErr);
-			return omxErr;
+			omxErr = omxSetAudioPassthrough(demuxer->audioDecoder, demuxer->audioPassthrough);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio render omxSetAudioClockAsSourceReference. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
 		}
-		
+
 		demuxer->audioRender = omxCreateComponent("OMX.broadcom.audio_render" , OMX_IndexParamAudioInit);
 		if (demuxer->audioRender == NULL) {
 			logInfo(LOG_DEMUXER, "Error creating OMX audio render component. (Error=0x%08x).\n", omx_error);
@@ -660,7 +695,39 @@ OMX_ERRORTYPE demuxerInitOMXAudio(struct DEMUXER_T *demuxer)
 			return omxErr;
 		}
 
-		if (demuxer->audioPassthrough == 0) {
+		if (demuxer->swDecodeAudio == 1) {
+
+			logInfo(LOG_DEMUXER_DEBUG, "Going to configure audio render for receiving software decoded stream.\n");
+
+			omxErr = omxSetAudioRenderInput(demuxer->audioRender, 48000, 16, 2);
+			if(omxErr != OMX_ErrorNone) {
+				logInfo(LOG_DEMUXER, "Error omxSetAudioRenderInput on audio render. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+			omxErr = omxSetStateForComponent(demuxer->audioRender, OMX_StateIdle);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio render SetStateForComponent to OMX_StateIdle. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+			omxErr = omxAllocInputBuffers(demuxer->audioRender, 0);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio render omxAllocInputBuffers. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+			omxErr = omxSetStateForComponent(demuxer->audioRender, OMX_StateExecuting);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio render SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+		}
+
+		if ((demuxer->audioPassthrough == 0) && (demuxer->swDecodeAudio == 0)) {
 			demuxer->audioMixer = omxCreateComponent("OMX.broadcom.audio_mixer" , OMX_IndexParamAudioInit);
 			if (demuxer->audioMixer == NULL) {
 				logInfo(LOG_DEMUXER, "Error creating OMX audio mixer component. (Error=0x%08x).\n", omx_error);
@@ -681,118 +748,116 @@ OMX_ERRORTYPE demuxerInitOMXAudio(struct DEMUXER_T *demuxer)
 			}
 		}
 		else {
-			demuxer->audioDecoderToRenderTunnel = omxCreateTunnel(demuxer->audioDecoder, demuxer->audioDecoder->outputPort, demuxer->audioRender, demuxer->audioRender->inputPort);
-			if (demuxer->audioDecoderToRenderTunnel == NULL) {
-				logInfo(LOG_DEMUXER, "Error creating tunnel between audio decoder and audio render components. (Error=0x%08x).\n", omx_error);
-				return omx_error;
+			if (demuxer->swDecodeAudio == 0) {
+				demuxer->audioDecoderToRenderTunnel = omxCreateTunnel(demuxer->audioDecoder, demuxer->audioDecoder->outputPort, demuxer->audioRender, demuxer->audioRender->inputPort);
+				if (demuxer->audioDecoderToRenderTunnel == NULL) {
+					logInfo(LOG_DEMUXER, "Error creating tunnel between audio decoder and audio render components. (Error=0x%08x).\n", omx_error);
+					return omx_error;
+				}
 			}
-
-		}
-		logInfo(LOG_DEMUXER, "before omxSetAudioCompressionFormatAndBuffer. Going to sleep 5 seconds.\n");
-		sleep(5);
-		logInfo(LOG_DEMUXER, "before omxSetAudioCompressionFormatAndBuffer. Done sleeping.\n");
-
-		logInfo(LOG_DEMUXER, "This audio stream has codec_id=%d, sample_rate=%d, bits_per_coded_sample=%d, channels=%d, passthrough=%d.\n", 
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->codec_id, 
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->sample_rate, 
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->channels,
-				demuxer->audioPassthrough);
-		omxErr = omxSetAudioCompressionFormatAndBuffer(demuxer->audioDecoder, demuxer->fFormatContext->streams[demuxer->audioStream]->codec->codec_id, 
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->sample_rate, 
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
-				demuxer->fFormatContext->streams[demuxer->audioStream]->codec->channels,
-				demuxer->audioPassthrough);
-		if (omxErr != OMX_ErrorNone)
-		{
-			logInfo(LOG_DEMUXER, "audio decoder omxSetAudioCompressionFormatAndBuffer. (Error=0x%08x).\n", omxErr);
-			return omxErr;
-		}
-		logInfo(LOG_DEMUXER, "After omxSetAudioCompressionFormatAndBuffer. Going to sleep 5 seconds.\n");
-		sleep(5);
-		logInfo(LOG_DEMUXER, "After omxSetAudioCompressionFormatAndBuffer. Done sleeping.\n");
-
-		omxErr = omxSetStateForComponent(demuxer->audioDecoder, OMX_StateIdle);
-		if (omxErr != OMX_ErrorNone)
-		{
-			logInfo(LOG_DEMUXER, "audio decoder SetStateForComponent to OMX_StateIdle. (Error=0x%08x).\n", omxErr);
-			return omxErr;
 		}
 
-		omxErr = omxAllocInputBuffers(demuxer->audioDecoder, 0);
-		if (omxErr != OMX_ErrorNone)
-		{
-			logInfo(LOG_DEMUXER, "audio decoder omxAllocInputBuffers. (Error=0x%08x).\n", omxErr);
-			return omxErr;
-		}
-
-		omxErr = omxSetStateForComponent(demuxer->audioDecoder, OMX_StateExecuting);
-		if (omxErr != OMX_ErrorNone)
-		{
-			logInfo(LOG_DEMUXER, "audio decoder SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
-			return omxErr;
-		}
-
-		if ((demuxer->audioDecoder->useHWDecode == 1) && (demuxer->audioPassthrough == 0)) {
-			omxErr = omxSetAudioExtraData(demuxer->audioDecoder, demuxer->fFormatContext->streams[demuxer->audioStream]->codec->extradata, 
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->extradata_size);
+		if (demuxer->swDecodeAudio == 0) {
+			logInfo(LOG_DEMUXER, "This audio stream has codec_id=%d, sample_rate=%d, bits_per_coded_sample=%d, channels=%d, passthrough=%d.\n", 
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->codec_id, 
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->sample_rate, 
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->channels,
+					demuxer->audioPassthrough);
+			omxErr = omxSetAudioCompressionFormatAndBuffer(demuxer->audioDecoder, demuxer->fFormatContext->streams[demuxer->audioStream]->codec->codec_id, 
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->sample_rate, 
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
+					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->channels,
+					demuxer->audioPassthrough);
 			if (omxErr != OMX_ErrorNone)
 			{
-				logInfo(LOG_DEMUXER, "audio decoder omxSetAudioExtraData. (Error=0x%08x).\n", omxErr);
+				logInfo(LOG_DEMUXER, "audio decoder omxSetAudioCompressionFormatAndBuffer. (Error=0x%08x).\n", omxErr);
 				return omxErr;
 			}
 
+			omxErr = omxSetStateForComponent(demuxer->audioDecoder, OMX_StateIdle);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio decoder SetStateForComponent to OMX_StateIdle. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+			omxErr = omxAllocInputBuffers(demuxer->audioDecoder, 0);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio decoder omxAllocInputBuffers. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+			omxErr = omxSetStateForComponent(demuxer->audioDecoder, OMX_StateExecuting);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "audio decoder SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+			if ((demuxer->audioDecoder->useHWDecode == 1) && (demuxer->audioPassthrough == 0)) {
+				omxErr = omxSetAudioExtraData(demuxer->audioDecoder, demuxer->fFormatContext->streams[demuxer->audioStream]->codec->extradata, 
+						demuxer->fFormatContext->streams[demuxer->audioStream]->codec->extradata_size);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "audio decoder omxSetAudioExtraData. (Error=0x%08x).\n", omxErr);
+					return omxErr;
+				}
+
+			}
+
+			if (demuxer->audioPassthrough == 0) {
+
+				OMX_AUDIO_PARAM_PCMMODETYPE pcmOutput;
+				OMX_AUDIO_PARAM_PCMMODETYPE pcmInput;
+
+				OMX_INIT_STRUCTURE(pcmOutput);
+				OMX_INIT_STRUCTURE(pcmInput);
+
+				omxErr = OMX_GetParameter(demuxer->audioDecoder->handle, OMX_IndexParamAudioPcm, &pcmInput);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "audio decoder GetParameter OMX_IndexParamAudioPcm error (0%08x)\n", omxErr);
+					return omxErr;
+				}
+
+				pcmInput.nPortIndex = demuxer->audioMixer->inputPort;
+				omxErr = OMX_SetParameter(demuxer->audioMixer->handle, OMX_IndexParamAudioPcm, &pcmInput);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "audio mixer SetParameter OMX_IndexParamAudioPcm  on inputport error (0%08x)\n", omxErr);
+					return omxErr;
+				}
+
+				pcmOutput.nPortIndex = demuxer->audioMixer->outputPort;
+				omxErr = OMX_SetParameter(demuxer->audioMixer->handle, OMX_IndexParamAudioPcm, &pcmOutput);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "audio mixer SetParameter OMX_IndexParamAudioPcm on outputport error (0%08x)\n", omxErr);
+					return omxErr;
+				}
+
+				omxErr = OMX_GetParameter(demuxer->audioMixer->handle, OMX_IndexParamAudioPcm, &pcmOutput);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "audio mixer GetParameter OMX_IndexParamAudioPcm outputport error (0%08x)\n", omxErr);
+					return omxErr;
+				}
+
+				pcmOutput.nPortIndex = demuxer->audioRender->inputPort;
+				omxErr = OMX_SetParameter(demuxer->audioRender->handle, OMX_IndexParamAudioPcm, &pcmOutput);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "audio render SetParameter OMX_IndexParamAudioPcm on inputport error (0%08x)\n", omxErr);
+					return omxErr;
+				}
+
+
+			}
 		}
 
-		if (demuxer->audioPassthrough == 0) {
-
-			OMX_AUDIO_PARAM_PCMMODETYPE pcmOutput;
-			OMX_AUDIO_PARAM_PCMMODETYPE pcmInput;
-
-			OMX_INIT_STRUCTURE(pcmOutput);
-			OMX_INIT_STRUCTURE(pcmInput);
-
-			omxErr = OMX_GetParameter(demuxer->audioDecoder->handle, OMX_IndexParamAudioPcm, &pcmInput);
-			if (omxErr != OMX_ErrorNone)
-			{
-				logInfo(LOG_DEMUXER, "audio decoder GetParameter OMX_IndexParamAudioPcm error (0%08x)\n", omxErr);
-				return omxErr;
-			}
-
-			pcmInput.nPortIndex = demuxer->audioMixer->inputPort;
-			omxErr = OMX_SetParameter(demuxer->audioMixer->handle, OMX_IndexParamAudioPcm, &pcmInput);
-			if (omxErr != OMX_ErrorNone)
-			{
-				logInfo(LOG_DEMUXER, "audio mixer SetParameter OMX_IndexParamAudioPcm  on inputport error (0%08x)\n", omxErr);
-				return omxErr;
-			}
-
-			pcmOutput.nPortIndex = demuxer->audioMixer->outputPort;
-			omxErr = OMX_SetParameter(demuxer->audioMixer->handle, OMX_IndexParamAudioPcm, &pcmOutput);
-			if (omxErr != OMX_ErrorNone)
-			{
-				logInfo(LOG_DEMUXER, "audio mixer SetParameter OMX_IndexParamAudioPcm on outputport error (0%08x)\n", omxErr);
-				return omxErr;
-			}
-
-			omxErr = OMX_GetParameter(demuxer->audioMixer->handle, OMX_IndexParamAudioPcm, &pcmOutput);
-			if (omxErr != OMX_ErrorNone)
-			{
-				logInfo(LOG_DEMUXER, "audio mixer GetParameter OMX_IndexParamAudioPcm outputport error (0%08x)\n", omxErr);
-				return omxErr;
-			}
-
-			pcmOutput.nPortIndex = demuxer->audioRender->inputPort;
-			omxErr = OMX_SetParameter(demuxer->audioRender->handle, OMX_IndexParamAudioPcm, &pcmOutput);
-			if (omxErr != OMX_ErrorNone)
-			{
-				logInfo(LOG_DEMUXER, "audio render SetParameter OMX_IndexParamAudioPcm on inputport error (0%08x)\n", omxErr);
-				return omxErr;
-			}
-
-
-			omxErr = omxSetAudioVolume(demuxer->audioRender, 0);
-		}
+		omxErr = omxSetAudioVolume(demuxer->audioRender, 100);
 	}
 
 	return OMX_ErrorNone;
@@ -1005,8 +1070,8 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 				if ((demuxerIsStopped(demuxer) == 0) && (demuxer->audioStream != -1) && (packet.data != NULL) && (packet.stream_index == demuxer->audioStream)) {
 					tmpPTS = ffmpegConvertTimestamp(demuxer, audioPTS, &demuxer->fFormatContext->streams[packet.stream_index]->time_base);
 					logInfo(LOG_DEMUXER_DEBUG, "AudioDTS=%" PRId64 ", AudioPTS=%" PRId64 ", demuxer->startPTS=%" PRId64 ", timestamp=%.15f\n", audioDTS, audioPTS, demuxer->startPTS, tmpPTS);
-//					if (decodeAudio(demuxer, &packet, tmpPTS) == 1) {
-					if (playAudioPacket(demuxer, &packet, tmpPTS) == 1) {
+					if (decodeAudio(demuxer, &packet, tmpPTS) == 1) {
+//					if (playAudioPacket(demuxer, &packet, tmpPTS) == 1) {
 						packet.data = NULL;
 					}
 					else {
@@ -1062,6 +1127,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	demuxer->showVideo = showVideo;
 	demuxer->playAudio = playAudio;
 	demuxer->audioPassthrough = audioPassthrough;
+	demuxer->swDecodeAudio = 1; // For now hardcoded.
 	
 	if (pthread_mutex_init(&demuxer->threadLock, NULL) != 0)
 	{
@@ -1272,7 +1338,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 
 	if(audioStream!=-1) {
 
-		// Get a pointer to the codec context for the video stream
+		// Get a pointer to the codec context for the audio stream
 		demuxer->audioCodecContext = avcodec_alloc_context3(fFormatContext->streams[audioStream]->codec->codec);
 
 		if (demuxer->audioCodecContext == NULL) {
