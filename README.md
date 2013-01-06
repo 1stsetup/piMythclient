@@ -26,3 +26,5 @@ It will currently use hdmi as audio and video output.
 ** For video currently only H264 is supported. 
 ** Audio is working but it is decoded in software and converted to stereo in software.
 Still working on trying to get it decoded in hardware.
+
+** It also has a memory leak. It will only show a short time of livetv due to this.
