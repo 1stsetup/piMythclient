@@ -29,6 +29,9 @@ pi: all
 pi-debug: CFLAGS += -DDEBUG
 pi-debug: pi
 
+pi-valgrind: CFLAGS += -g -O0
+pi-valgrind: pi
+
 clean:
 	for i in $(OBJS); do (if test -e "$$i"; then ( rm $$i ); fi ); done
 	@rm -f $(BIN) $(LIB)

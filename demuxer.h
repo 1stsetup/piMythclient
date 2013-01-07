@@ -41,10 +41,13 @@ struct DEMUXER_T{
 	pthread_t demuxerThread;
 	int doStop;
 	pthread_mutex_t threadLock;
+
+	AVIOContext *ioContext;
 	AVCodec *videoCodec;
 	AVCodec *audioCodec;
 
 	AVCodecContext *audioCodecContext;
+	AVCodecContext *videoCodecContext;
 
 	struct OMX_COMPONENT_T *videoDecoder;
 	struct OMX_COMPONENT_T *videoRender;

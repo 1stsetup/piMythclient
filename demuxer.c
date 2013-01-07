@@ -326,7 +326,7 @@ int playAudioPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 					omxErr = omxEstablishTunnel(demuxer->audioDecoderToMixerTunnel);
 					if(omxErr != OMX_ErrorNone) {
 						logInfo(LOG_DEMUXER, "Error establishing tunnel between audio decoder and audio mixer components. (Error=0x%08x).\n", omxErr);
-						av_free_packet(packet);
+//						av_free_packet(packet);
 						return 1;
 					}
 
@@ -378,7 +378,7 @@ int playAudioPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 			}
 			if(nRetry == 5) {
 				logInfo(LOG_DEMUXER, "OMX_EmptyThisBuffer() finaly failed\n");
-				av_free_packet(packet);
+//				av_free_packet(packet);
 				return 1;
 			}
 		}
@@ -430,6 +430,7 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 	if (iBytesUsed < 0 || !got_frame) {
 		m_iBufferSize1 = 0;
 		m_iBufferSize2 = 0;
+		avcodec_free_frame(&frame1);
 		return iBytesUsed;
 	}
 
@@ -457,6 +458,7 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 	av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
 	if (swr_init(swr) < 0) {
 		logInfo(LOG_DEMUXER, "Error swr_init.\n");
+		avcodec_free_frame(&frame1);
 		return 0;
 	}
 
@@ -471,6 +473,8 @@ logInfo(LOG_DEMUXER_DEBUG, "Hier c.\n");
 logInfo(LOG_DEMUXER_DEBUG, "Hier d.\n");
 	if (out_samples < 0) {
 		logInfo(LOG_DEMUXER, "Error swr_convert.\n");
+		av_freep(&output);
+		avcodec_free_frame(&frame1);
 		return 0;
 	}
 
@@ -478,8 +482,8 @@ logInfo(LOG_DEMUXER_DEBUG, "Hier e.\n");
 	m_iBufferSize1 = av_samples_get_buffer_size(NULL, 2, out_samples, AV_SAMPLE_FMT_S16, 1);
 logInfo(LOG_DEMUXER_DEBUG, "Hier f.\n");
 	logInfo(LOG_DEMUXER_DEBUG, "converted: m_iBufferSize1=%d, out_samples=%d\n", m_iBufferSize1, out_samples);
-logInfo(LOG_DEMUXER_DEBUG, "Hier g.\n");
-	fwrite(output, 1, m_iBufferSize1, demuxer->outfile);
+//logInfo(LOG_DEMUXER_DEBUG, "Hier g.\n");
+	//fwrite(output, 1, m_iBufferSize1, demuxer->outfile);
 logInfo(LOG_DEMUXER_DEBUG, "Hier h.\n");
 
 	av_init_packet(&avpkt);
@@ -491,10 +495,12 @@ logInfo(LOG_DEMUXER_DEBUG, "Hier i.\n");
 logInfo(LOG_DEMUXER_DEBUG, "Hier j.\n");
 
 	av_freep(&output);
-
+	swr_free(&swr);
 	avcodec_free_frame(&frame1);
 
-	av_free_packet(inPacket);
+	if (ret == 1) {
+		av_free_packet(inPacket);
+	}
 
 	return ret;
 }
@@ -867,10 +873,10 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 {
 	static AVPacket packet;
 	int doneReading = 0;
-	uint64_t videoBytesWritten = 0;
-	uint64_t audioBytesWritten = 0;
-	FILE *videoFile = NULL;
-	FILE *audioFile = NULL;
+//	uint64_t videoBytesWritten = 0;
+//	uint64_t audioBytesWritten = 0;
+//	FILE *videoFile = NULL;
+//	FILE *audioFile = NULL;
 
 #ifdef PI
 	if (omxInit() != 0) {
@@ -907,7 +913,7 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 	demuxer->setAudioStartTime = 1;
 	demuxer->firstFrame = 1;
 
-	if (demuxer->videoStream != -1) {
+/*	if (demuxer->videoStream != -1) {
 	//	videoFile = fopen(getStringAtListIndex(mythConnection->currentRecording,10), "w");
 		videoFile = fopen("test.video", "w");
 		if (videoFile == NULL) {
@@ -923,7 +929,7 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 			goto theEnd;
 		}
 	}
-
+*/
 	struct timespec interval;
 	struct timespec remainingInterval;
 	int64_t audioPTS = -1;
@@ -995,13 +1001,13 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 				logInfo(LOG_DEMUXER_DEBUG, "\n");*/
 
 				//fwrite(packet.data, packet.size, 1, videoFile);
-				videoBytesWritten += packet.size;
+				//videoBytesWritten += packet.size;
 			}
 			else {
 				if ((demuxerIsStopped(demuxer) == 0) && (demuxer->videoStream != -1) && (packet.data != NULL) && (packet.stream_index == demuxer->audioStream)) {
 					// Write packet to file.
 					//fwrite(packet.data, packet.size, 1, audioFile);
-					audioBytesWritten += packet.size;
+					//audioBytesWritten += packet.size;
 				}
 				else {
 					logInfo(LOG_DEMUXER_DEBUG, "This is a packet we do not want to process. Going to ignore it. packet.stream_index=%d.\n", packet.stream_index);
@@ -1092,15 +1098,15 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 		}
 
 		interval.tv_sec = 0;
-		interval.tv_nsec = 100;
+		interval.tv_nsec = 10;
 
 		nanosleep(&interval, &remainingInterval);
 	}
 
 	if(packet.data!=NULL) av_free_packet(&packet);
 
-	if (demuxer->videoStream != -1) fclose(videoFile);
-	if (demuxer->audioStream != -1) fclose(audioFile);
+//	if (demuxer->videoStream != -1) fclose(videoFile);
+//	if (demuxer->audioStream != -1) fclose(audioFile);
 
 theEnd:
 	pthread_mutex_lock(&demuxer->threadLock);
@@ -1141,21 +1147,23 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	unsigned char *buffer = (unsigned char*)av_malloc(FFMPEG_FILE_BUFFER_SIZE);
 
 	// Init io module for input
-	AVIOContext *ioContext = avio_alloc_context(buffer, FFMPEG_FILE_BUFFER_SIZE, 0, (void *)demuxer, &demuxerReadPacket, 0, &demuxerSeek);
+	demuxer->ioContext = avio_alloc_context(buffer, FFMPEG_FILE_BUFFER_SIZE, 0, (void *)demuxer, &demuxerReadPacket, 0, &demuxerSeek);
 
-	if (ioContext == NULL) {
+	if (demuxer->ioContext == NULL) {
 		logInfo( LOG_DEMUXER," - init_put_byte() failed!\n");
 		demuxer_error = DEMUXER_ERROR_CREATE_IOCONTEXT;
 		free(demuxer);
 		return NULL;
 	}
 
-	ioContext->max_packet_size = 6144;
-	if(ioContext->max_packet_size)
-		ioContext->max_packet_size *= FFMPEG_FILE_BUFFER_SIZE / ioContext->max_packet_size;
+	demuxer->ioContext->max_packet_size = 6144;
+	if(demuxer->ioContext->max_packet_size)
+		demuxer->ioContext->max_packet_size *= FFMPEG_FILE_BUFFER_SIZE / demuxer->ioContext->max_packet_size;
+
+	demuxer->ioContext->must_flush = 1;
 
 	AVInputFormat *format = NULL;
-	av_probe_input_buffer(ioContext, &format, "", NULL, 0, 0);
+	av_probe_input_buffer(demuxer->ioContext, &format, "", NULL, 0, 0);
 
 	if(!format) {
 		logInfo( LOG_DEMUXER," - av_probe_input_buffer() failed!\n");
@@ -1174,7 +1182,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		return NULL;
 	}
 
-	fFormatContext->pb = ioContext;
+	fFormatContext->pb = demuxer->ioContext;
 
 	fFormatContext->interrupt_callback.callback = &demuxerInterruptCallback;
 	fFormatContext->interrupt_callback.opaque = demuxer;
@@ -1203,6 +1211,8 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		free(demuxer);
 		return NULL;
 	}
+
+	//av_free(format);
 
 	if (demuxerStartInterrupted == 1) {
 		logInfo( LOG_DEMUXER," - demuxerStartInterrupted!\n");
@@ -1286,10 +1296,9 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	if(videoStream!=-1) {
 
 		// Get a pointer to the codec context for the video stream
-		AVCodecContext *fVideoCodecContext = avcodec_alloc_context3(fFormatContext->streams[videoStream]->codec->codec);
-//		fVideoCodecContext= fFormatContext->streams[videoStream]->codec;
+		demuxer->videoCodecContext = avcodec_alloc_context3(fFormatContext->streams[videoStream]->codec->codec);
 
-		if (fVideoCodecContext == NULL) {
+		if (demuxer->videoCodecContext == NULL) {
 			logInfo( LOG_DEMUXER," fVideoCodecContext == NULL!\n");
 			demuxer_error = DEMUXER_ERROR_CREATE_VIDEO_CONTEXT;
 			free(demuxer);
@@ -1324,11 +1333,11 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		// Inform the codec that we can handle truncated bitstreams -- i.e.,
 		// bitstreams where frame boundaries can fall in the middle of packets
 		if(fVideoCodec->capabilities & CODEC_CAP_TRUNCATED)
-		    fVideoCodecContext->flags|=CODEC_FLAG_TRUNCATED;
+		    demuxer->videoCodecContext->flags|=CODEC_FLAG_TRUNCATED;
 
 		// Open codec
 		AVDictionary *videoDict = NULL;
-		if(avcodec_open2(fVideoCodecContext, fVideoCodec, &videoDict)<0) {
+		if(avcodec_open2(demuxer->videoCodecContext, fVideoCodec, &videoDict)<0) {
 			logInfo( LOG_DEMUXER," Could not video open codec!\n");
 			demuxer_error = DEMUXER_ERROR_OPEN_VIDEO_CODEC;
 			free(demuxer);
@@ -1384,7 +1393,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 			return NULL;
 		}
 
-		demuxer->outfile = fopen("audio.raw", "wb");
+//		demuxer->outfile = fopen("audio.raw", "wb");
 	}
 
 	if (showVideo == 1) {
@@ -1437,6 +1446,12 @@ void demuxerStop(struct DEMUXER_T *demuxer)
 	logInfo(LOG_DEMUXER_DEBUG, "Waiting for demuxer thread to stop.\n");
 	pthread_join(demuxer->demuxerThread, NULL);
 	logInfo(LOG_DEMUXER_DEBUG, "Demuxer thread stopped.\n");
+
+	av_free(demuxer->ioContext);
+
+	avcodec_close(demuxer->videoCodecContext);
+	avcodec_close(demuxer->audioCodecContext);
+	avformat_close_input(&demuxer->fFormatContext);
 }
 
 

@@ -132,6 +132,7 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 			char *tmpNewBuffer;
 			char *tmpOldBuffer;
 
+			// Need to replace this with a memcpy
 			while (oldBufferPos<connection->bufferEnd) {
 				tmpNewBuffer = newBuffer + newBufferPos;
 				tmpOldBuffer = connection->buffer + oldBufferPos;
@@ -145,6 +146,7 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 			logInfo( LOG_CONNECTION_DEBUG,"fillBuffer: newBuffer=%s.\n", newBuffer);
 
 			free(connection->buffer);
+
 			connection->buffer = newBuffer;
 			connection->bufferEnd = connection->bufferEnd - connection->bufferPos;
 			connection->bufferPos = 0;
@@ -155,15 +157,6 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 	logInfo( LOG_CONNECTION_DEBUG,"fillBuffer: Buffer is ready. bufferEnd=%d, bufferPos=%d, bufferLen=%d.\n", connection->bufferEnd, connection->bufferPos, connection->bufferLen);
 
 	// Add new received data to connection buffer
-/*	unsigned int responsePos = 0;
-	char *tmpBuffer;
-	while (responsePos < readLen) {
-		tmpBuffer = connection->buffer + connection->bufferEnd;
-		*tmpBuffer = response[responsePos];
-		responsePos++;
-		connection->bufferEnd++;
-	}*/
-
 	char *tmpBuffer;
 	tmpBuffer = connection->buffer + connection->bufferEnd;
 	memcpy(tmpBuffer, response, readLen);
@@ -186,20 +179,9 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 unsigned long long int readConnectionBuffer(struct CONNECTION_T *connection, char *dstBuffer, int len)
 {
 	unsigned long long int rlen = len;
-//	char *tmpBuffer = connection->buffer + connection->bufferPos;
-
-//	char *tmpOutBuffer = dstBuffer;
 
 	pthread_mutex_lock(&connection->readWriteLock);
 
-/*	while ((rlen > 0) && (connection->bufferPos < connection->bufferEnd)) {
-		tmpBuffer = connection->buffer + connection->bufferPos;
-		*tmpOutBuffer = *tmpBuffer;
-		rlen--;
-		connection->bufferPos++;
-		tmpOutBuffer++;
-	}
-*/
 	char *tmpBuffer = connection->buffer + connection->bufferPos;
 
 	if (getConnectionDataLen(connection) < len) {
