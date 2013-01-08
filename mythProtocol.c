@@ -697,6 +697,118 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 
 }
 
+struct MYTH_CONNECTION_T *checkRecorderProgram(struct MYTH_CONNECTION_T *masterConnection, char *recordingFilename)
+{
+	struct MYTH_CONNECTION_T *result = NULL;
+
+	char	response[RESPONSESIZE];
+	char 	command[MAX_COMMAND_LENGTH];
+	int 	error = 0;
+	char	*fileURL = NULL;
+	char 	*hostURIFull = NULL;
+	char	*hostURIReal = NULL;
+	struct LISTITEM_T *tmpList;
+	struct LISTITEM_T *URI;
+	struct LISTITEM_T *hostURI;
+
+	if (error >= 0) {
+		snprintf(&command[0], MAX_COMMAND_LENGTH, "QUERY_FILE_EXISTS[]:[]%s", recordingFilename);
+		error = sendCommandAndReadReply(masterConnection, &command[0], &response[0], RESPONSESIZE);
+		if (error >= 0) {
+			if (checkResponse(&response[0], "1[]:[]") != 1) {
+				logInfo( LOG_MYTHPROTOCOL,"File recorder file %s does not exist.\n",recordingFilename);
+				error = -1;
+			}
+		}
+
+	}
+
+	if (error >= 0) {
+		snprintf(&command[0], MAX_COMMAND_LENGTH, "QUERY_RECORDING BASENAME %s", recordingFilename);
+		error = sendCommandAndReadReply(masterConnection, &command[0], &response[0], RESPONSESIZE);
+		if (error >= 0) {
+			if (checkResponse(&response[0], "OK[]:[]") != 1) {
+				logInfo( LOG_MYTHPROTOCOL,"could not get details for file %s.\n",recordingFilename);
+				error = -1;
+			}
+		}
+
+	}
+
+	if (error >=0) {
+		// We need the myth://[Default]@hostname:6543/file.mpg part
+		tmpList = convertStrToList(&response[0], "[]:[]");
+
+		fileURL = getStringAtListIndex(tmpList, 11);
+		URI = convertStrToList(fileURL, "/");
+		
+		if (listCount(URI) == 1) {
+			result = createMythConnection(masterConnection->hostname, masterConnection->port, ANN_PLAYBACK);
+		}
+		else {
+			hostURIFull = getStringAtListIndex(URI, 2);
+			hostURI = convertStrToList(hostURIFull, "@");
+			hostURIReal = getStringAtListIndex(hostURI, listCount(hostURI)-1);
+			freeList(hostURI);
+			hostURI = convertStrToList(hostURIReal, ":");
+			result = createMythConnection(getStringAtListIndex(hostURI, 0), atoi(getStringAtListIndex(hostURI, 1)), ANN_PLAYBACK);
+			freeList(hostURI);
+		}
+
+		if (result == NULL) {
+			error = -1;
+		}
+		else {
+			result->currentRecording = tmpList->next;
+			result->streaming = 0;
+		}
+
+		freeListItem(tmpList);
+		freeList(URI);
+
+	}
+
+
+	if (error >= 0) {
+		return result;
+	}
+	return NULL;
+
+}
+
+int playRecorderProgram(struct MYTH_CONNECTION_T *mythConnection)
+{
+	int error = 0;
+
+	logInfo( LOG_MYTHPROTOCOL_DEBUG,"playRecorderProgram.\n");
+
+	if (error >= 0) {
+		mythConnection->transferConnection = createMythConnection(mythConnection->hostname, mythConnection->port, ANN_FILETRANSFER);
+		if (mythConnection == NULL) {
+			logInfo( LOG_MYTHPROTOCOL,"error createMythConnection filetransfer.\n");
+			error = -1;
+		}
+	}
+
+	logInfo( LOG_MYTHPROTOCOL_DEBUG,"created transferConnection.\n");
+
+	if (error >= 0) {
+		mythConnection->transferConnection->backendConnection = mythConnection;
+		error = mythAnnFileTransfer(mythConnection->transferConnection);
+		if (error < 0) {
+			logInfo( LOG_MYTHPROTOCOL,"Error mythAnnFileTransfer error.\n");
+			error = -1;
+		}
+	}
+
+	if (error >= 0) {
+		logInfo( LOG_MYTHPROTOCOL,"Started stream for recorded program.\n");
+		mythConnection->streaming = 1;
+	}
+
+	return error;
+}
+
 int startLiveTVStream(struct MYTH_CONNECTION_T *mythConnection)
 {
 	int error = 0;

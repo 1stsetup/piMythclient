@@ -46,6 +46,8 @@ int mythSpawnLiveTV(struct MYTH_CONNECTION_T *mythConnection, struct MYTH_CONNEC
 struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection, int channelNum);
 int startLiveTVStream(struct MYTH_CONNECTION_T *mythConnection);
 int stopLiveTVStream(struct MYTH_CONNECTION_T *mythConnection);
+struct MYTH_CONNECTION_T *checkRecorderProgram(struct MYTH_CONNECTION_T *masterConnection, char *recordingFilename);
+int playRecorderProgram(struct MYTH_CONNECTION_T *mythConnection);
 unsigned long long int mythFiletransferRequestBlock(struct MYTH_CONNECTION_T *mythConnection, unsigned long long int blockLen);
 unsigned long long int mythFiletransferSeek(struct MYTH_CONNECTION_T *mythConnection, unsigned long long int position, int whence, unsigned long long int currentPos);
 int mythFiletransferDone(struct MYTH_CONNECTION_T *mythConnection);

@@ -11,7 +11,7 @@ To compile on the pi do "make pi"
 
 To run do:
 
-./piMythclient -h &lt;hostname&gt;	[-p &lt;port&gt;]	-c &lt;channelnumber&gt; [-l &lt;comma separated list of logattributes to turn on&gt;] [-t &lt;language code&gt;] [-a &lt;0|1&gt;] [-v &lt;0|1&gt;] [-e &lt;0|1&gt;]
+./piMythclient -h &lt;hostname&gt;	[-p &lt;port&gt;]	-c &lt;channelnumber&gt; [-l &lt;comma separated list of logattributes to turn on&gt;] [-t &lt;language code&gt;] [-a &lt;0|1&gt;] [-v &lt;0|1&gt;] [-e &lt;0|1&gt;] [-e &lt;basename&gt;]
 
 * -h hostname of mythbackend or ip address
 * -p port of mythbackend. When not specified it will use the default
@@ -21,9 +21,12 @@ To run do:
 * -a 0|1 "Set audio on or off. Default 1 (on)"
 * -v 0|1 "Set video on or off. Default 1 (on)"
 * -e 0|1 "Set audio passthrough on. Decoding is done externally. Default 1 (on)"
+* -r <basename> Name of the file in the recordings folder of mythtv backend.
 
 It will currently use hdmi as audio and video output.
-** For video currently only H264 is supported. 
-** Audio is working but it is decoded in software and converted to stereo in software.
+
+* For video currently only H264 is supported. 
+* Audio is working but it is decoded in software and converted to stereo in software.
+
 Still working on trying to get it decoded in hardware.
 

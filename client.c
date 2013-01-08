@@ -75,6 +75,7 @@ int main(int argc, char *argv[])
 	int audioPassthrough = 1;
 	int showVideo = 1;
 	int playAudio = 1;
+	char *recordingFilename = NULL;
 
 	int c;
 	opterr = 0;
@@ -88,9 +89,10 @@ int main(int argc, char *argv[])
 	-a <0|1> "Set audio on or off. Default 1 (on)"
 	-v <0|1> "Set video on or off. Default 1 (on)"
 	-e <0|1> "Set audio passthrough on. Decoding is done externally. Default 0 (off)"
+	-r <recording filename>
 */
 
-	while ((c = getopt(argc, argv, "h:p:c:l:t:e:a:v:")) != -1)
+	while ((c = getopt(argc, argv, "h:p:c:l:t:e:a:v:r:")) != -1)
 		switch (c) {
 		case 'h':
 			hostname = optarg;
@@ -115,6 +117,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'v':
 			showVideo = atoi(optarg);
+			break;
+		case 'r':
+			recordingFilename = optarg;
 			break;
 		}
 
@@ -190,7 +195,12 @@ int main(int argc, char *argv[])
 	}
 
 	if (error >= 0) {
-		slaveConnection = startLiveTV(masterConnection, startChannelNum);
+		if (recordingFilename == NULL) {
+			slaveConnection = startLiveTV(masterConnection, startChannelNum);
+		}
+		else {
+			slaveConnection = checkRecorderProgram(masterConnection, recordingFilename);
+		}
 		if (slaveConnection == NULL) {
 			error = -1;
 		}
@@ -209,6 +219,13 @@ int main(int argc, char *argv[])
 	}
 	
 	int changingChannel = 0;
+
+	if ((error >=0) && (recordingFilename != NULL)) {
+		error = playRecorderProgram(slaveConnection);
+		if (error >= 0) {
+			demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
+		}
+	}
 	
 	if (error >= 0) {
 		while (doStop == 0) {
@@ -232,7 +249,7 @@ int main(int argc, char *argv[])
 				if ((FD_ISSET(monitorConnection->connection->socket, &working_fd_set)) && (changingChannel == 0)) {
 
 					readResponse(monitorConnection->connection, &response[0], 6000);
-					if (checkResponse(&response[0], "BACKEND_MESSAGE[]:[]RECORDING_LIST_CHANGE UPDATE") != 0) {
+					if ((checkResponse(&response[0], "BACKEND_MESSAGE[]:[]RECORDING_LIST_CHANGE UPDATE") != 0) && (recordingFilename == NULL)) {
 						// We have an update see if it is for us.
 						tmpDetails = convertStrToList(&response[53], "[]:[]");
 						logInfo( LOG_CLIENT," We have an update see if it is for us. newChannelId=%s, oldChannelId=%s\n", getStringAtListIndex(tmpDetails,6),getStringAtListIndex(slaveConnection->currentRecording,6));
@@ -259,7 +276,7 @@ int main(int argc, char *argv[])
 						}
 					}
 
-					if ((slaveConnection->streaming == 0) && (checkResponse(&response[0], "BACKEND_MESSAGE[]:[]UPDATE_FILE_SIZE") != 0)) {
+					if ((slaveConnection->streaming == 0) && (checkResponse(&response[0], "BACKEND_MESSAGE[]:[]UPDATE_FILE_SIZE") != 0) && (recordingFilename == NULL)) {
 						// We have an update_file_size see if it is for us.
 						tmpDetails = convertStrToList(&response[0], " ");
 						logInfo( LOG_CLIENT," We have an update_file_size see if it is for us. newChannelId=%s, oldChannelId=%s\n", getStringAtListIndex(tmpDetails,1),getStringAtListIndex(slaveConnection->currentRecording,6));
@@ -285,7 +302,7 @@ int main(int argc, char *argv[])
 							newChannel = (newChannel * 10) + (stdinBuffer - 48);
 							logInfo(LOG_CLIENT, "newChannel=%d.\n", newChannel);
 						}
-						if (stdinBuffer == 10) {
+						if ((stdinBuffer == 10) && (recordingFilename != NULL)) {
 							channelChanged = 0;
 							if (newChannel != 0) { // enter key
 								// Received enter. Switch to new channel when it is not 0.
