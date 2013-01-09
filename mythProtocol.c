@@ -88,11 +88,24 @@ ssize_t readResponse(struct CONNECTION_T *connection, char *outResponse, size_t 
 
 	// Clear complete command with spaces (0x00)
 	memset(outResponse, 0x00, rlen+1);
-	if (readConnectionBuffer(connection, outResponse, rlen) != rlen) {
+	unsigned long long int read = 0;
+	unsigned long long int totalRead = 0;
+	int tryCount = 0;
+	do {
+		read = readConnectionBuffer(connection, outResponse+totalRead, rlen);
+		rlen -= read;
+		totalRead += read;
+		if (read == 0) {
+			fillConnectionBuffer(connection, rlen, 1);
+			tryCount++;
+		}
+	} while ((rlen > 0) && (tryCount < 10));
+		
+/*	if (read != rlen) {
 		logInfo( LOG_MYTHPROTOCOL,"readResponse: WARNING: Not enough data in connection buffer.\n");
 	}
-
-	logInfo( LOG_MYTHPROTOCOL_DEBUG,"%d<-: %-7d %s\n", connection->socket, rlen, outResponse);
+*/
+	logInfo( LOG_MYTHPROTOCOL_DEBUG,"%d<-: %-7lld %s\n", connection->socket, totalRead, outResponse);
 
 	return strlen(outResponse);	
 }
@@ -140,6 +153,7 @@ struct MYTH_CONNECTION_T *createMythConnection(char *inHostname, uint16_t port, 
 {
 	struct MYTH_CONNECTION_T *backendConnection = (struct MYTH_CONNECTION_T *)malloc(sizeof(struct MYTH_CONNECTION_T));
 	backendConnection->connection = (struct CONNECTION_T *)malloc(sizeof(struct CONNECTION_T));
+	backendConnection->connected = 0;
 
 	logInfo(LOG_MYTHPROTOCOL, "start.\n");
 
@@ -207,6 +221,8 @@ struct MYTH_CONNECTION_T *createMythConnection(char *inHostname, uint16_t port, 
 		}
 	}
 
+	backendConnection->connected = 1;
+
 	return backendConnection;
 }
 
@@ -215,6 +231,10 @@ void destroyMythConnection(struct MYTH_CONNECTION_T *mythConnection)
 	if (mythConnection == NULL) return;
 
 	if (mythConnection->connection) {
+		if (mythConnection->connected == 1) {
+			sendCommand(mythConnection->connection, "DONE");
+		}
+
 		destroyConnection(mythConnection->connection);
 	}
 
@@ -279,7 +299,7 @@ int mythAnnMonitor(struct MYTH_CONNECTION_T *mythConnection)
 	return error;
 }
 
-int mythAnnFileTransfer(struct MYTH_CONNECTION_T *mythConnection)
+int mythAnnFileTransfer(struct MYTH_CONNECTION_T *mythConnection, char *filename)
 {
         char    response[RESPONSESIZE];
         char    command[MAX_COMMAND_LENGTH];
@@ -293,7 +313,7 @@ int mythAnnFileTransfer(struct MYTH_CONNECTION_T *mythConnection)
         }
 
         if (error >= 0) {
-		char *filename = getStringAtListIndex(mythConnection->backendConnection->currentRecording,10);
+//		char *filename = getStringAtListIndex(mythConnection->backendConnection->currentRecording,10);
 		memset(&command[0], 0, MAX_COMMAND_LENGTH);
                 snprintf(&command[0], MAX_COMMAND_LENGTH, "ANN FileTransfer %s %d %d %d[]:[]/%s[]:[][]:[][]:[][]:[]", hostname, 0, 1, 10000, filename);
                 free(hostname);
@@ -609,6 +629,32 @@ int mythMasterUpdateProgInfo(struct MYTH_CONNECTION_T *mythConnection)
 	return error;
 }
 
+char *mythConvertToFilename(char *channelId, char *startTime)
+{
+	//channel = 11010  STARTTIME = 2013-01-09T20:00:05Z
+	char *result = malloc(strlen(channelId)+1+14+4+1);
+	memset(result, 0, strlen(channelId)+1+14+4+1);
+
+	char *tmpPtr1 = result;
+	char *tmpPtr2 = startTime;
+
+	// First copy channelId into new string.
+	memcpy(tmpPtr1, channelId, strlen(channelId));
+	tmpPtr1 += strlen(channelId);
+	tmpPtr1[0] = 0x5F; //"_";
+	tmpPtr1++;
+	memcpy(tmpPtr1, tmpPtr2, 4);
+	tmpPtr1 += 4; tmpPtr2 +=5;
+	int i;
+	for(i = 0; i < 5; i++) {
+		memcpy(tmpPtr1, tmpPtr2, 2);
+		tmpPtr1 += 2; tmpPtr2 +=3;
+	}
+	memcpy(tmpPtr1, ".mpg", 4);
+
+	return result;
+}
+
 struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection, int channelNum)
 {
 	struct MYTH_CONNECTION_T *result = NULL;
@@ -674,7 +720,7 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 
 	if (error >= 0) {
 		result->currentRecording = mythGetCurrentRecording(result);
-		logInfo( LOG_MYTHPROTOCOL,"startLiveTV: mythGetCurrentRecording: %d items in list.\n",listCount(result->currentRecording));
+		logInfo( LOG_MYTHPROTOCOL,"startLiveTV: mythGetCurrentRecording: channelId=%d, %d items in list.\n", result->channelId, listCount(result->currentRecording));
 	}
 
 	if (chainId != NULL) {
@@ -784,7 +830,7 @@ int playRecorderProgram(struct MYTH_CONNECTION_T *mythConnection)
 
 	if (error >= 0) {
 		mythConnection->transferConnection = createMythConnection(mythConnection->hostname, mythConnection->port, ANN_FILETRANSFER);
-		if (mythConnection == NULL) {
+		if (mythConnection->transferConnection == NULL) {
 			logInfo( LOG_MYTHPROTOCOL,"error createMythConnection filetransfer.\n");
 			error = -1;
 		}
@@ -794,7 +840,7 @@ int playRecorderProgram(struct MYTH_CONNECTION_T *mythConnection)
 
 	if (error >= 0) {
 		mythConnection->transferConnection->backendConnection = mythConnection;
-		error = mythAnnFileTransfer(mythConnection->transferConnection);
+		error = mythAnnFileTransfer(mythConnection->transferConnection, getStringAtListIndex(mythConnection->currentRecording,10));
 		if (error < 0) {
 			logInfo( LOG_MYTHPROTOCOL,"Error mythAnnFileTransfer error.\n");
 			error = -1;
@@ -807,6 +853,55 @@ int playRecorderProgram(struct MYTH_CONNECTION_T *mythConnection)
 	}
 
 	return error;
+}
+
+void mythSetNewTransferConnection(struct MYTH_CONNECTION_T *slaveConnection, struct MYTH_CONNECTION_T *newTransferConnection)
+{
+	pthread_mutex_lock(&slaveConnection->readWriteLock);
+
+	struct MYTH_CONNECTION_T *oldTransferConnection = slaveConnection->transferConnection;
+
+	if (oldTransferConnection) {
+		pthread_mutex_lock(&slaveConnection->transferConnection->readWriteLock);
+	}
+
+	logInfo( LOG_MYTHPROTOCOL,"Switching transferConnection.\n");
+	slaveConnection->transferConnection = newTransferConnection;
+	if (oldTransferConnection) {
+		destroyMythConnection(oldTransferConnection);
+		pthread_mutex_unlock(&slaveConnection->transferConnection->readWriteLock);
+	}
+
+	pthread_mutex_unlock(&slaveConnection->readWriteLock);
+}
+
+struct MYTH_CONNECTION_T *mythPrepareNextProgram(struct MYTH_CONNECTION_T *mythConnection, char *newFilename)
+{
+	int error = 0;
+	struct MYTH_CONNECTION_T *result = NULL;
+
+	logInfo( LOG_MYTHPROTOCOL,"mythPrepareNextProgram.\n");
+
+	if (error >= 0) {
+		result = createMythConnection(mythConnection->hostname, mythConnection->port, ANN_FILETRANSFER);
+		if (result == NULL) {
+			logInfo( LOG_MYTHPROTOCOL,"error createMythConnection filetransfer.\n");
+			return NULL;
+		}
+	}
+
+	logInfo( LOG_MYTHPROTOCOL,"created transferConnection.\n");
+
+	if (error >= 0) {
+		result->backendConnection = mythConnection;
+		error = mythAnnFileTransfer(result, newFilename);
+		if (error < 0) {
+			logInfo( LOG_MYTHPROTOCOL,"Error mythAnnFileTransfer error.\n");
+			return NULL;
+		}
+	}
+
+	return result;
 }
 
 int startLiveTVStream(struct MYTH_CONNECTION_T *mythConnection)
@@ -860,7 +955,7 @@ int startLiveTVStream(struct MYTH_CONNECTION_T *mythConnection)
 
 	if (error >= 0) {
 		mythConnection->transferConnection->backendConnection = mythConnection;
-		error = mythAnnFileTransfer(mythConnection->transferConnection);
+		error = mythAnnFileTransfer(mythConnection->transferConnection, getStringAtListIndex(mythConnection->currentRecording,10));
 		if (error < 0) {
 			logInfo( LOG_MYTHPROTOCOL,"startLiveTV: mythAnnFileTransfer error.\n");
 			error = -1;
@@ -888,4 +983,25 @@ int stopLiveTVStream(struct MYTH_CONNECTION_T *mythConnection)
 	destroyMythConnection(mythConnection->transferConnection);
 
 	return error;
+}
+
+struct LISTITEM_T *mythQueryRecordings(struct MYTH_CONNECTION_T *mythConnection, char *sort)
+{
+        char    response[RESPONSESIZE*15];
+        char    command[MAX_COMMAND_LENGTH];
+        int     error = 0;
+
+        if (error >= 0) {
+                snprintf(&command[0], MAX_COMMAND_LENGTH, "QUERY_RECORDINGS %s", sort);
+                error = sendCommandAndReadReply(mythConnection, &command[0], &response[0], RESPONSESIZE*5);
+        }
+
+/*        if (error >= 0) {
+                if (checkResponse(&response[0], "1") == 0) {
+                        error = -1;
+                }
+        }
+*/
+        return NULL;
+
 }

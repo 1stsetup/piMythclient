@@ -816,6 +816,8 @@ OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *c
 	formatType.nPortIndex = component->inputPort;
 	formatType.eCompressionFormat = compressionFormat;
 
+//	framerate = 50;
+
 	if (framerate > 0) {
 		formatType.xFramerate = framerate * (1<<16);
 	}

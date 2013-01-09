@@ -89,7 +89,8 @@ int main(int argc, char *argv[])
 	-a <0|1> "Set audio on or off. Default 1 (on)"
 	-v <0|1> "Set video on or off. Default 1 (on)"
 	-e <0|1> "Set audio passthrough on. Decoding is done externally. Default 0 (off)"
-	-r <recording filename>
+	-r <recording filename | list>  list will show details of all recordings while a "recording name" will start the playback of a the specified recording.
+			e.g.: "recording filename" == 20024_20121201183000.mpg  <-  file name can be found in recording directory of mythtvbackend. 
 */
 
 	while ((c = getopt(argc, argv, "h:p:c:l:t:e:a:v:r:")) != -1)
@@ -187,6 +188,14 @@ int main(int argc, char *argv[])
 	logInfo( LOG_CLIENT,"main: We have a valid connection to the master backend.\n");
 #endif
 
+	if ((error >= 0) && (recordingFilename != NULL) && (strcmp(recordingFilename, "list") == 0)) {
+		logInfo( LOG_CLIENT,"Going to show a list of recordings.\n");
+
+		mythQueryRecordings(masterConnection, "Descending");
+		destroyMythConnection(masterConnection);
+		return 0;
+	}
+
 	if (error >= 0) {
 		monitorConnection = createMythConnection(hostname, port, ANN_MONITOR);
 		if (monitorConnection == NULL) {
@@ -228,6 +237,7 @@ int main(int argc, char *argv[])
 	}
 	
 	if (error >= 0) {
+		int firstStartRecording = 0;
 		while (doStop == 0) {
 			memcpy(&working_fd_set, &our_fd_set, sizeof(our_fd_set));
 
@@ -249,12 +259,45 @@ int main(int argc, char *argv[])
 				if ((FD_ISSET(monitorConnection->connection->socket, &working_fd_set)) && (changingChannel == 0)) {
 
 					readResponse(monitorConnection->connection, &response[0], 6000);
-					if ((checkResponse(&response[0], "BACKEND_MESSAGE[]:[]RECORDING_LIST_CHANGE UPDATE") != 0) && (recordingFilename == NULL)) {
+					// We need to trigger in BACKEND_MESSAGE[]:[]SYSTEM_EVENT REC_STARTED CARDID 29 CHANID 11010 STARTTIME 2013-01-09T20:00:05Z RECSTATUS 0 SENDER xen01[]:[]empty
+					if ((checkResponse(&response[0], "BACKEND_MESSAGE[]:[]SYSTEM_EVENT REC_STARTED CARDID") != 0) && (recordingFilename == NULL)) {
 						// We have an update see if it is for us.
-						tmpDetails = convertStrToList(&response[53], "[]:[]");
-						logInfo( LOG_CLIENT," We have an update see if it is for us. newChannelId=%s, oldChannelId=%s\n", getStringAtListIndex(tmpDetails,6),getStringAtListIndex(slaveConnection->currentRecording,6));
-						logInfo( LOG_CLIENT," We have an update see if it is for us. newStartTime=%s, oldStartTimeChannelId=%s\n", getStringAtListIndex(tmpDetails,25),getStringAtListIndex(slaveConnection->currentRecording,25));
-						if ((strcmp(getStringAtListIndex(tmpDetails,6), getStringAtListIndex(slaveConnection->currentRecording,6)) == 0) &&
+						tmpDetails = convertStrToList(&response[0], " ");
+						if (slaveConnection->recorderId == atoi(getStringAtListIndex(tmpDetails,3))) {  // Check recorderId
+							if (firstStartRecording == 1) {
+								char *newFileName = mythConvertToFilename( getStringAtListIndex(tmpDetails,5), getStringAtListIndex(tmpDetails,7));
+								if (slaveConnection->streaming == 0) {
+									logInfo(LOG_CLIENT, "Going to request file=%s.\n", newFileName);
+									slaveConnection->channelId = atoi(getStringAtListIndex(tmpDetails,5));
+									slaveConnection->transferConnection = mythPrepareNextProgram(slaveConnection, newFileName); 
+									if (slaveConnection->transferConnection != NULL) {
+										logInfo( LOG_CLIENT," *********************> starting demuxer thread.\n");
+										sleep(5); // We let it sleep for 5 seconds so mythtv can buffer up.
+										demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
+										if (demuxer == NULL) {
+											logInfo( LOG_CLIENT," *********************> Error starting demuxer thread.\n");
+										}
+										else {
+											slaveConnection->streaming = 1;
+										}
+									}
+								}
+								else {
+									logInfo(LOG_CLIENT, "Change of program on same channel. Will tell demuxer it needs to stream from a new file %s.\n", newFileName);
+									demuxerSetNextFile(demuxer, newFileName);
+								}
+								free(newFileName);
+							}
+							else {
+								// We do this because when the first start recording is seen mythtv is still tuning in on the channel. 
+								// And will stop this recording when tuned. Then it will start the real recording. 
+								logInfo(LOG_CLIENT, "First startrecording we see. We wait for the next one.\n");
+								firstStartRecording++;
+							}
+						}
+						freeList(tmpDetails);
+
+/*						if ((strcmp(getStringAtListIndex(tmpDetails,6), getStringAtListIndex(slaveConnection->currentRecording,6)) == 0) &&
 							(strcmp(getStringAtListIndex(tmpDetails,25), getStringAtListIndex(slaveConnection->currentRecording,25)) > 0)){
 							// it is for us update currentRecording details. pos 53
 							if (slaveConnection->streaming == 1) {
@@ -274,9 +317,9 @@ int main(int argc, char *argv[])
 							slaveConnection->currentRecording = tmpDetails;
 							logInfo( LOG_CLIENT," it is for us update currentRecording details. data=%s\n",convertListToString(slaveConnection->currentRecording, "[]:[]"));
 						}
-					}
+*/					}
 
-					if ((slaveConnection->streaming == 0) && (checkResponse(&response[0], "BACKEND_MESSAGE[]:[]UPDATE_FILE_SIZE") != 0) && (recordingFilename == NULL)) {
+/*					if ((slaveConnection->streaming == 0) && (checkResponse(&response[0], "BACKEND_MESSAGE[]:[]UPDATE_FILE_SIZE") != 0) && (recordingFilename == NULL)) {
 						// We have an update_file_size see if it is for us.
 						tmpDetails = convertStrToList(&response[0], " ");
 						logInfo( LOG_CLIENT," We have an update_file_size see if it is for us. newChannelId=%s, oldChannelId=%s\n", getStringAtListIndex(tmpDetails,1),getStringAtListIndex(slaveConnection->currentRecording,6));
@@ -293,7 +336,7 @@ int main(int argc, char *argv[])
 						}
 						freeList(tmpDetails);
 					}
-				}
+*/				}
 
 				if (FD_ISSET(STDIN, &working_fd_set)) {
 					if (read(STDIN, &stdinBuffer, 1) == 1) {

@@ -83,6 +83,14 @@ static int demuxerInterruptCallback(struct DEMUXER_T *demuxer)
 	}
 }
 
+void demuxerSetNextFile(struct DEMUXER_T *demuxer, char *filename)
+{
+	demuxer->nextFile = malloc(strlen(filename)+1);
+	memset(demuxer->nextFile, 0, strlen(filename)+1);
+	memcpy(demuxer->nextFile, filename, strlen(filename));
+	logInfo( LOG_DEMUXER,"Set next file to %s.\n", demuxer->nextFile);
+}
+
 int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize) 
 {
 	if (demuxerInterruptCallback(demuxer) == 1) {
@@ -93,14 +101,18 @@ int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize
 	logInfo( LOG_DEMUXER_DEBUG,"Received request to read %d bytes.\n", bufferSize);
 
 	ssize_t readLen = mythFiletransferRequestBlock(demuxer->mythConnection, bufferSize);
-	logInfo( LOG_DEMUXER_DEBUG,"Myth will send %zd bytes of the requested %d.\n", readLen, bufferSize);
+	logInfo( LOG_DEMUXER,"Myth will send %zd bytes of the requested %d.\n", readLen, bufferSize);
+	if (readLen == 0) {
+		return 0;
+	}
+
 	ssize_t receivedLen = fillConnectionBuffer(demuxer->mythConnection->transferConnection->connection, readLen, 1);
 	logInfo( LOG_DEMUXER_DEBUG,"Connection buffer was filled with %zd bytes of the requested %zd.\n", receivedLen, readLen);
 
 	struct timespec interval;
 	struct timespec remainingInterval;
 
-	while (getConnectionDataLen(demuxer->mythConnection->transferConnection->connection) < bufferSize) {
+	while (getConnectionDataLen(demuxer->mythConnection->transferConnection->connection) < receivedLen) {
 		interval.tv_sec = 0;
 		interval.tv_nsec = 10;
 
@@ -113,6 +125,21 @@ int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize
 //		logInfo( LOG_DEMUXER_DEBUG,"Received %zd bytes from connection.\n", readBufferLen);
 	}
 	logInfo( LOG_DEMUXER_DEBUG,"Received %zd bytes from connection.\n", readBufferLen);
+
+	logInfo( LOG_DEMUXER,"test %zd< %d && demuxer->nextFile = %s.\n", readLen, bufferSize, demuxer->nextFile);
+	if ((readLen < bufferSize) && (demuxer->nextFile != NULL)) {
+		// Swap transferConnection on our mythConnection.
+		logInfo( LOG_DEMUXER, "We received less bytes from myth than requested. We also have a next file %s. Probably due to a program change on the same channel.\n", demuxer->nextFile);
+		struct MYTH_CONNECTION_T *newTransferConnection = mythPrepareNextProgram(demuxer->mythConnection, demuxer->nextFile);
+		if (newTransferConnection == NULL) {
+			logInfo(LOG_DEMUXER, "Error creating new transferConnection.\n");
+		}
+		else {
+			mythSetNewTransferConnection(demuxer->mythConnection, newTransferConnection);
+		}
+		free(demuxer->nextFile);
+		demuxer->nextFile = NULL;
+	}
 
 	return readBufferLen;
 }
@@ -431,7 +458,8 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 		m_iBufferSize1 = 0;
 		m_iBufferSize2 = 0;
 		avcodec_free_frame(&frame1);
-		return iBytesUsed;
+		av_free_packet(inPacket);
+		return 1;
 	}
 
 	m_iBufferSize1 = av_samples_get_buffer_size(NULL, demuxer->audioCodecContext->channels, frame1->nb_samples, demuxer->audioCodecContext->sample_fmt, 1);
@@ -1134,6 +1162,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	demuxer->playAudio = playAudio;
 	demuxer->audioPassthrough = audioPassthrough;
 	demuxer->swDecodeAudio = 1; // For now hardcoded.
+	demuxer->nextFile = NULL;
 	
 	if (pthread_mutex_init(&demuxer->threadLock, NULL) != 0)
 	{

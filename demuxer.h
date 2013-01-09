@@ -49,6 +49,8 @@ struct DEMUXER_T{
 	AVCodecContext *audioCodecContext;
 	AVCodecContext *videoCodecContext;
 
+	char *nextFile;
+
 	struct OMX_COMPONENT_T *videoDecoder;
 	struct OMX_COMPONENT_T *videoRender;
 	struct OMX_COMPONENT_T *videoScheduler;
@@ -88,6 +90,7 @@ struct DEMUXER_T{
 
 int demuxer_error;
 
+void demuxerSetNextFile(struct DEMUXER_T *demuxer, char *filename);
 void demuxerSetLanguage(char *newLanguage);
 struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int showVideo, int playAudio, int audioPassthrough);
 void demuxerStop(struct DEMUXER_T *demuxer);
