@@ -1,3 +1,32 @@
+/* ***** BEGIN MIV LICENSE BLOCK *****
+ * Version: MIV 1.0
+ *
+ * This file is part of the "MIV" license.
+ *
+ * Rules of this license:
+ * - This code may be reused in other free software projects (free means the end user does not have to pay anything to use it).
+ * - This code may be reused in other non free software projects. 
+ *     !! For this rule to apply you will grant or provide the below mentioned author unlimited free access/license to the:
+ *         - binary program of the non free software project which uses this code. By this we mean a full working version.
+ *         - One piece of the hardware using this code. For free at no costs to the author. 
+ *         - 1% of the netto world wide sales.
+ * - When you use this code always leave this complete license block in the file.
+ * - When you create binaries (executable or library) based on this source you 
+ *     need to provide a copy of this source online publicaly accessable.
+ * - When you make modifications to this source file you will keep this license block complete.
+ * - When you make modifications to this source file you will send a copy of the new file to 
+ *     the author mentioned in this license block. These rules will also apply to the new file.
+ * - External packages used by this source might have a different license which you should comply with.
+ *
+ * Latest version of this license can be found at http://www.1st-setup.nl
+ *
+ * Author: Michel Verbraak (info@1st-setup.nl)
+ * Website: http://www.1st-setup.nl
+ * email: info@1st-setup.nl
+ *
+ *
+ * ***** END MIV LICENSE BLOCK *****/
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -362,6 +391,23 @@ int mythFrontendReady(struct MYTH_CONNECTION_T *mythConnection)
 	return error;
 }
 
+int mythRefreshBackend(struct MYTH_CONNECTION_T *mythConnection)
+{
+	char	response[RESPONSESIZE];
+	char 	command[MAX_COMMAND_LENGTH];
+	int 	error = 0;
+
+	snprintf(&command[0], MAX_COMMAND_LENGTH, "REFRESH_BACKEND");
+	error = sendCommandAndReadReply(mythConnection, &command[0], &response[0], RESPONSESIZE);
+	if (error >= 0) {
+		if (checkResponse(&response[0], "OK") == 0) {
+			error = -1;
+		}
+	}
+
+	return error;
+}
+
 int mythGetInput(struct MYTH_CONNECTION_T *mythConnection)
 {
 	char	response[RESPONSESIZE];
@@ -655,56 +701,112 @@ char *mythConvertToFilename(char *channelId, char *startTime)
 	return result;
 }
 
+int mythQueryRecorderCheckChannel(struct MYTH_CONNECTION_T *mythConnection, int recorderId, int channel)
+{
+	char	response[RESPONSESIZE];
+	char 	command[MAX_COMMAND_LENGTH];
+	int 	error = 0;
+
+	if (error >= 0) {
+		snprintf(&command[0], MAX_COMMAND_LENGTH, "QUERY_RECORDER %d[]:[]CHECK_CHANNEL[]:[]%d", recorderId, channel);
+		error = sendCommandAndReadReply(mythConnection, &command[0], &response[0], RESPONSESIZE);
+	}
+
+	if ((error < 0) || (checkResponse(&response[0], "bad") == 1)) {
+		return -1;
+	}
+
+	return atoi(&response[0]);
+}
+
+struct MYTH_RECORDER_T *mythGetNextFreeRecorder(struct MYTH_CONNECTION_T *mythConnection, int currentRecorderId)
+{
+	char	response[RESPONSESIZE];
+	char 	command[MAX_COMMAND_LENGTH];
+	int 	error = 0;
+	struct MYTH_RECORDER_T *result = NULL;
+
+	struct LISTITEM_T *details;
+
+	if (error >= 0) {
+		snprintf(&command[0], MAX_COMMAND_LENGTH, "GET_NEXT_FREE_RECORDER[]:[]%d", currentRecorderId);
+		error = sendCommandAndReadReply(mythConnection, &command[0], &response[0], RESPONSESIZE);
+	}
+
+	if (error >=0) {
+		if (checkResponse(&response[0], "-1[]:[]nohost[]:[]-1") == 1) {
+			logInfo( LOG_MYTHPROTOCOL,"No free recorder available after %d.\n", currentRecorderId);
+			error = -1;
+		}
+	}
+
+	if (error >=0) {
+		details = convertStrToList(&response[0], "[]:[]");
+		result = malloc(sizeof(struct MYTH_RECORDER_T));
+
+		result->recorderId = atoi(getStringAtListIndex(details, 0));
+		result->hostname = malloc(strlen(getStringAtListIndex(details, 1))+1);
+		memset(result->hostname, 0, strlen(getStringAtListIndex(details, 1))+1);
+
+		strncpy(result->hostname, getStringAtListIndex(details, 1), strlen(getStringAtListIndex(details, 1)));
+
+		result->port = atoi(getStringAtListIndex(details, 2));
+		freeList(details);
+	}
+
+	return result; //convertStrToList(&response[0], "[]:[]");
+}
+
 struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection, int channelNum)
 {
 	struct MYTH_CONNECTION_T *result = NULL;
 
-	char	response[RESPONSESIZE];
-	char 	command[MAX_COMMAND_LENGTH];
 	int 	error = 0;
 	char	*chainId = NULL;
-	struct LISTITEM_T *tmpList;
+	struct MYTH_RECORDER_T *recorder;
 
-	if (error >= 0) {
-		snprintf(&command[0], MAX_COMMAND_LENGTH, "GET_NEXT_FREE_RECORDER[]:[]-1");
-		error = sendCommandAndReadReply(masterConnection, &command[0], &response[0], RESPONSESIZE);
-		if (error >= 0) {
-			if (checkResponse(&response[0], "-1[]:[]nohost[]:[]-1") == 1) {
-				logInfo( LOG_MYTHPROTOCOL,"No free recorder available.\n");
-				error = -1;
-			}
-		}
+	recorder = mythGetNextFreeRecorder(masterConnection, -1);
+	int recorderFound = 0;
+	while ((recorderFound == 0) && (recorder != NULL)) {
 
-	}
+		logInfo( LOG_MYTHPROTOCOL,"Trying Recorder=%d, ip-address=%s, port=%d\n", recorder->recorderId, recorder->hostname, recorder->port);
 
-	if (error >=0) {
-		tmpList = convertStrToList(&response[0], "[]:[]");
+		result = createMythConnection(recorder->hostname, recorder->port, ANN_PLAYBACK);
 
-		logInfo( LOG_MYTHPROTOCOL,"Recorder=%s\n", getStringAtListIndex(tmpList, 0));
-		logInfo( LOG_MYTHPROTOCOL,"ip-address=%s\n", getStringAtListIndex(tmpList, 1));
-		logInfo( LOG_MYTHPROTOCOL,"port=%s\n", getStringAtListIndex(tmpList, 2));
-
-		result = createMythConnection(getStringAtListIndex(tmpList, 1), atoi(getStringAtListIndex(tmpList, 2)), ANN_PLAYBACK);
-		if (result == NULL) {
-			error = -1;
+		if ((result != NULL) && (mythQueryRecorderCheckChannel(result, recorder->recorderId, channelNum) == 1)) {
+			recorderFound = 1;
 		}
 		else {
-			chainId = malloc(37);
-			memset(chainId, 0, sizeof(chainId));
-			uuid_t tmpUUID;
-			uuid_generate(tmpUUID);
-			uuid_unparse(tmpUUID, chainId);
-			uuid_clear(tmpUUID);
-			logInfo( LOG_MYTHPROTOCOL,"uuid=%s\n", chainId);
-
-			result->streaming = 0;
+			if (result != NULL) {
+				destroyMythConnection(result);
+			}
+			recorder = mythGetNextFreeRecorder(masterConnection, recorder->recorderId);
 		}
+	}
+
+	if (recorderFound == 0) {
+		logInfo( LOG_MYTHPROTOCOL,"No free recorder available.\n");
+		error = -1;
+	}
+
+	if ((error >=0) && (result != NULL)) {
+		logInfo( LOG_MYTHPROTOCOL,"Going to use Recorder=%d, ip-address=%s, port=%d\n", recorder->recorderId, recorder->hostname, recorder->port);
+
+		chainId = malloc(37);
+		memset(chainId, 0, sizeof(chainId));
+		uuid_t tmpUUID;
+		uuid_generate(tmpUUID);
+		uuid_unparse(tmpUUID, chainId);
+		uuid_clear(tmpUUID);
+		logInfo( LOG_MYTHPROTOCOL,"uuid=%s\n", chainId);
+
+		result->streaming = 0;
 	}
 
 	if ((result != NULL) && (error >=0)) {
 
 		//struct MYTH_CONNECTION_T *mythConnection, int recorderId, char *chainId, int channelNum, int pip
-		if (mythSpawnLiveTV(result, masterConnection, atoi(getStringAtListIndex(tmpList, 0)), chainId, channelNum, 0) < 0) {
+		if (mythSpawnLiveTV(result, masterConnection, recorder->recorderId, chainId, channelNum, 0) < 0) {
 			logInfo( LOG_MYTHPROTOCOL,"startLiveTV: mythSpawnLiveTV failed.\n");
 			error = -1;
 		}

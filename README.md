@@ -25,7 +25,7 @@ To run do:
 
 It will currently use hdmi as audio and video output.
 
-* For video currently only H264 is supported. 
+* For video currently only H264 and MPEG2VIDEO are supported. 
 * Audio is working but it is decoded in software and converted to stereo in software.
 
 Still working on trying to get it decoded in hardware. Probably need extra licenses for this which are not yet available from the Raspberry pi organisation.

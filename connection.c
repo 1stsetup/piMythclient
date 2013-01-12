@@ -1,3 +1,32 @@
+/* ***** BEGIN MIV LICENSE BLOCK *****
+ * Version: MIV 1.0
+ *
+ * This file is part of the "MIV" license.
+ *
+ * Rules of this license:
+ * - This code may be reused in other free software projects (free means the end user does not have to pay anything to use it).
+ * - This code may be reused in other non free software projects. 
+ *     !! For this rule to apply you will grant or provide the below mentioned author unlimited free access/license to the:
+ *         - binary program of the non free software project which uses this code. By this we mean a full working version.
+ *         - One piece of the hardware using this code. For free at no costs to the author. 
+ *         - 1% of the netto world wide sales.
+ * - When you use this code always leave this complete license block in the file.
+ * - When you create binaries (executable or library) based on this source you 
+ *     need to provide a copy of this source online publicaly accessable.
+ * - When you make modifications to this source file you will keep this license block complete.
+ * - When you make modifications to this source file you will send a copy of the new file to 
+ *     the author mentioned in this license block. These rules will also apply to the new file.
+ * - External packages used by this source might have a different license which you should comply with.
+ *
+ * Latest version of this license can be found at http://www.1st-setup.nl
+ *
+ * Author: Michel Verbraak (info@1st-setup.nl)
+ * Website: http://www.1st-setup.nl
+ * email: info@1st-setup.nl
+ *
+ *
+ * ***** END MIV LICENSE BLOCK *****/
+
 
 #include <stdlib.h>
 #include <string.h>
@@ -11,8 +40,47 @@
 #include "connection.h"
 #include "globalFunctions.h"
 
+int createSocketIPv6(char *inHostname, uint16_t port)
+{
+        char hostname[100];
+	int	sd = -1;
+	//struct sockaddr_in sin;
+	struct sockaddr_in6 pin;
+	struct hostent *hp;
 
-int createSocket(char *inHostname, uint16_t port)
+        strncpy(hostname,inHostname, 100);
+
+	/* go find out about the desired host machine */
+	if ((hp = gethostbyname2(hostname, AF_INET6)) == 0) {
+		logInfo( LOG_CONNECTION,"Error on gethostbyname2.\n");
+		return sd;
+	}
+
+	/* fill in the socket structure with host information */
+	memset(&pin, 0, sizeof(pin));
+
+//	pin.sin6_len = sizeof(pin);
+	pin.sin6_family = hp->h_addrtype;
+	memcpy((char *)&pin.sin6_addr, hp->h_addr, hp->h_length);
+	pin.sin6_port = htons(port);
+
+	/* grab an Internet domain socket */
+	if ((sd = socket(AF_INET6, SOCK_STREAM, 0)) == -1) {
+		logInfo( LOG_CONNECTION,"Could not create socket.\n");
+		return sd;
+	}
+
+	/* connect to PORT on HOST */
+	if (connect(sd,(struct sockaddr *)  &pin, sizeof(pin)) == -1) {
+		logInfo( LOG_CONNECTION,"Could not connect.\n");
+		sd = -1;
+		return sd;
+	}
+
+	return sd;
+}
+
+int createSocketIPv4(char *inHostname, uint16_t port)
 {
         char hostname[100];
 	int	sd = -1;
@@ -23,8 +91,8 @@ int createSocket(char *inHostname, uint16_t port)
         strncpy(hostname,inHostname, 100);
 
 	/* go find out about the desired host machine */
-	if ((hp = gethostbyname(hostname)) == 0) {
-		logInfo( LOG_CONNECTION,"gethostbyname");
+	if ((hp = gethostbyname(hostname)) == NULL) {
+		logInfo( LOG_CONNECTION,"Error on gethostbyname.\n");
 		return sd;
 	}
 
@@ -36,13 +104,13 @@ int createSocket(char *inHostname, uint16_t port)
 
 	/* grab an Internet domain socket */
 	if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-		logInfo( LOG_CONNECTION,"socket");
+		logInfo( LOG_CONNECTION,"Could not create socket.\n");
 		return sd;
 	}
 
 	/* connect to PORT on HOST */
 	if (connect(sd,(struct sockaddr *)  &pin, sizeof(pin)) == -1) {
-		logInfo( LOG_CONNECTION,"connect");
+		logInfo( LOG_CONNECTION,"Could not connect.\n");
 		sd = -1;
 		return sd;
 	}
@@ -56,9 +124,15 @@ struct CONNECTION_T *createConnection(char *inHostname, uint16_t port)
 
 	struct CONNECTION_T *result = (struct CONNECTION_T *)malloc(sizeof(struct CONNECTION_T));
 
-	result->socket = createSocket(inHostname, port);
+	if (indexOf(inHostname, ":") > -1) {
+		result->socket = createSocketIPv6(inHostname, port);
+	}
+	else {
+		result->socket = createSocketIPv4(inHostname, port);
+	}
 	if (result->socket < 0) {
 		free(result);
+		logInfo( LOG_CONNECTION,"result->socket < 0.\n");
 		return NULL;
 	}
 	result->buffer = NULL;

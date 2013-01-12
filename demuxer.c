@@ -1,3 +1,32 @@
+/* ***** BEGIN MIV LICENSE BLOCK *****
+ * Version: MIV 1.0
+ *
+ * This file is part of the "MIV" license.
+ *
+ * Rules of this license:
+ * - This code may be reused in other free software projects (free means the end user does not have to pay anything to use it).
+ * - This code may be reused in other non free software projects. 
+ *     !! For this rule to apply you will grant or provide the below mentioned author unlimited free access/license to the:
+ *         - binary program of the non free software project which uses this code. By this we mean a full working version.
+ *         - One piece of the hardware using this code. For free at no costs to the author. 
+ *         - 1% of the netto world wide sales.
+ * - When you use this code always leave this complete license block in the file.
+ * - When you create binaries (executable or library) based on this source you 
+ *     need to provide a copy of this source online publicaly accessable.
+ * - When you make modifications to this source file you will keep this license block complete.
+ * - When you make modifications to this source file you will send a copy of the new file to 
+ *     the author mentioned in this license block. These rules will also apply to the new file.
+ * - External packages used by this source might have a different license which you should comply with.
+ *
+ * Latest version of this license can be found at http://www.1st-setup.nl
+ *
+ * Author: Michel Verbraak (info@1st-setup.nl)
+ * Website: http://www.1st-setup.nl
+ * email: info@1st-setup.nl
+ *
+ *
+ * ***** END MIV LICENSE BLOCK *****/
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -423,7 +452,6 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 	if (!demuxer->audioCodecContext) return -1;
 
 	int m_iBufferSize1 = AVCODEC_MAX_AUDIO_FRAME_SIZE;
-	int m_iBufferSize2 = 0;
 
 	AVPacket avpkt;
 	av_init_packet(&avpkt);
@@ -456,10 +484,36 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 
 	if (iBytesUsed < 0 || !got_frame) {
 		m_iBufferSize1 = 0;
-		m_iBufferSize2 = 0;
-		avcodec_free_frame(&frame1);
-		av_free_packet(inPacket);
-		return 1;
+
+		// We are going to create silence for this frame
+		if (demuxer->lastFrameSize > 0) {
+			av_init_packet(&avpkt);
+			uint8_t *silence = malloc(demuxer->lastFrameSize);
+			memset(silence, 0, demuxer->lastFrameSize);
+
+			avpkt.data = silence;
+			avpkt.size = m_iBufferSize1;
+
+			int ret = playAudioPacket(demuxer, &avpkt, pts);
+
+			free(silence);
+
+			avcodec_free_frame(&frame1);
+
+			if (ret == 1) {
+				av_free_packet(inPacket);
+			}
+
+			return ret;
+		}
+		else {
+			// We did not have any valid audio packet.
+			avcodec_free_frame(&frame1);
+
+			av_free_packet(inPacket);
+
+			return 1;
+		}
 	}
 
 	m_iBufferSize1 = av_samples_get_buffer_size(NULL, demuxer->audioCodecContext->channels, frame1->nb_samples, demuxer->audioCodecContext->sample_fmt, 1);
@@ -474,56 +528,60 @@ int decodeAudio(struct DEMUXER_T *demuxer, AVPacket *inPacket, double pts)
 
 //	fwrite(frame1->data[0], 1, m_iBufferSize1, demuxer->outfile);
 
-	// Conversion to 2 channel AV_SAMPLE_FMT_S16 is done in software. Could be done in hw using a decoder and mixer probably
-	SwrContext *swr = swr_alloc();
+	// Conversion to 2 channel AV_SAMPLE_FMT_S16 is done in software. Cannot be done for every format in HW so we do it in software.
+	uint8_t *output = NULL;
+	SwrContext *swr = NULL;
+	if ((frame1->format != AV_SAMPLE_FMT_S16) || (demuxer->audioCodecContext->channel_layout != AV_CH_LAYOUT_STEREO)) {
+		swr = swr_alloc();
 
-	av_opt_set_int(swr, "in_channel_layout", demuxer->audioCodecContext->channel_layout /*AV_CH_LAYOUT_5POINT1*/, 0);
-//	av_opt_set_int(swr, "in_channel_layout", AV_CH_LAYOUT_5POINT1, 0);
-	av_opt_set_int(swr, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0); // For now we do stereo.
-	av_opt_set_int(swr, "in_sample_rate", demuxer->audioCodecContext->sample_rate, 0);
-	av_opt_set_int(swr, "out_sample_rate", demuxer->audioCodecContext->sample_rate, 0);
-	av_opt_set_sample_fmt(swr, "in_sample_fmt", frame1->format, 0);
-	av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-	if (swr_init(swr) < 0) {
-		logInfo(LOG_DEMUXER, "Error swr_init.\n");
-		avcodec_free_frame(&frame1);
-		return 0;
+		av_opt_set_int(swr, "in_channel_layout", demuxer->audioCodecContext->channel_layout /*AV_CH_LAYOUT_5POINT1*/, 0);
+		//	av_opt_set_int(swr, "in_channel_layout", AV_CH_LAYOUT_5POINT1, 0);
+		av_opt_set_int(swr, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0); // For now we do stereo.
+		av_opt_set_int(swr, "in_sample_rate", demuxer->audioCodecContext->sample_rate, 0);
+		av_opt_set_int(swr, "out_sample_rate", demuxer->audioCodecContext->sample_rate, 0);
+		av_opt_set_sample_fmt(swr, "in_sample_fmt", frame1->format, 0);
+		av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+		if (swr_init(swr) < 0) {
+			logInfo(LOG_DEMUXER, "Error swr_init.\n");
+			avcodec_free_frame(&frame1);
+			return 0;
+		}
+
+		int in_samples = frame1->nb_samples;
+		int out_samples = av_rescale_rnd(swr_get_delay(swr, demuxer->audioCodecContext->sample_rate) + in_samples, demuxer->audioCodecContext->sample_rate, demuxer->audioCodecContext->sample_rate, AV_ROUND_UP);
+		av_samples_alloc(&output, NULL, 2, out_samples,	AV_SAMPLE_FMT_S16, 0);
+		out_samples = swr_convert(swr, &output, out_samples, (const uint8_t **)&frame1->data[0], in_samples);
+		if (out_samples < 0) {
+			logInfo(LOG_DEMUXER, "Error swr_convert.\n");
+			av_freep(&output);
+			avcodec_free_frame(&frame1);
+			return 0;
+		}
+
+		m_iBufferSize1 = av_samples_get_buffer_size(NULL, 2, out_samples, AV_SAMPLE_FMT_S16, 1);
+		logInfo(LOG_DEMUXER_DEBUG, "converted: m_iBufferSize1=%d, out_samples=%d\n", m_iBufferSize1, out_samples);
+		//fwrite(output, 1, m_iBufferSize1, demuxer->outfile);
+
+		av_init_packet(&avpkt);
+		avpkt.data = output;
+		avpkt.size = m_iBufferSize1;
+	}
+	else {
+		av_init_packet(&avpkt);
+		avpkt.data = frame1->data[0];
+		avpkt.size = m_iBufferSize1;
 	}
 
-	uint8_t *output;
-	int in_samples = frame1->nb_samples;
-logInfo(LOG_DEMUXER_DEBUG, "Hier a.\n");
-	int out_samples = av_rescale_rnd(swr_get_delay(swr, demuxer->audioCodecContext->sample_rate) + in_samples, demuxer->audioCodecContext->sample_rate, demuxer->audioCodecContext->sample_rate, AV_ROUND_UP);
-logInfo(LOG_DEMUXER_DEBUG, "Hier b.\n");
-	av_samples_alloc(&output, NULL, 2, out_samples,	AV_SAMPLE_FMT_S16, 0);
-logInfo(LOG_DEMUXER_DEBUG, "Hier c.\n");
-	out_samples = swr_convert(swr, &output, out_samples, (const uint8_t **)&frame1->data[0], in_samples);
-logInfo(LOG_DEMUXER_DEBUG, "Hier d.\n");
-	if (out_samples < 0) {
-		logInfo(LOG_DEMUXER, "Error swr_convert.\n");
-		av_freep(&output);
-		avcodec_free_frame(&frame1);
-		return 0;
-	}
+	demuxer->lastFrameSize = avpkt.size;
 
-logInfo(LOG_DEMUXER_DEBUG, "Hier e.\n");
-	m_iBufferSize1 = av_samples_get_buffer_size(NULL, 2, out_samples, AV_SAMPLE_FMT_S16, 1);
-logInfo(LOG_DEMUXER_DEBUG, "Hier f.\n");
-	logInfo(LOG_DEMUXER_DEBUG, "converted: m_iBufferSize1=%d, out_samples=%d\n", m_iBufferSize1, out_samples);
-//logInfo(LOG_DEMUXER_DEBUG, "Hier g.\n");
-	//fwrite(output, 1, m_iBufferSize1, demuxer->outfile);
-logInfo(LOG_DEMUXER_DEBUG, "Hier h.\n");
-
-	av_init_packet(&avpkt);
-	avpkt.data = output;
-	avpkt.size = m_iBufferSize1;
-
-logInfo(LOG_DEMUXER_DEBUG, "Hier i.\n");
 	int ret = playAudioPacket(demuxer, &avpkt, pts);
-logInfo(LOG_DEMUXER_DEBUG, "Hier j.\n");
 
-	av_freep(&output);
-	swr_free(&swr);
+	if (output != NULL) {
+		av_freep(&output);
+	}
+	if (swr != NULL) {
+		swr_free(&swr);
+	}
 	avcodec_free_frame(&frame1);
 
 	if (ret == 1) {
@@ -613,7 +671,20 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 		}
 
 		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
-		omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingAVC, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+
+		switch (demuxer->videoCodec->id) {
+		case AV_CODEC_ID_H264:
+			logInfo(LOG_DEMUXER, "This video stream has a codecid of H264.\n");
+			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingAVC, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+			break;
+		case AV_CODEC_ID_MPEG2VIDEO:
+			logInfo(LOG_DEMUXER, "This video stream has a codecid of MPEG2VIDEO.\n");
+			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingMPEG2, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+			break;
+		default:
+			logInfo(LOG_DEMUXER, "This video stream has a codecid I cannot handle yet. CodeID=%d.\n",demuxer->videoCodec->id);
+		}
+
 		if (omxErr != OMX_ErrorNone)
 		{
 			logInfo(LOG_DEMUXER, "video decoder omxSetVideoCompressionFormatAndFrameRate. (Error=0x%08x).\n", omxErr);
@@ -992,7 +1063,6 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 
 	packet.data = NULL;
 
-	int seenNegativePTS = 1;
 	int skipCount = 40;
 
 	demuxer->videoPortSettingChanged = 0;
@@ -1163,6 +1233,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	demuxer->audioPassthrough = audioPassthrough;
 	demuxer->swDecodeAudio = 1; // For now hardcoded.
 	demuxer->nextFile = NULL;
+	demuxer->lastFrameSize = 0;
 	
 	if (pthread_mutex_init(&demuxer->threadLock, NULL) != 0)
 	{
