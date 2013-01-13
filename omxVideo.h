@@ -145,6 +145,8 @@ struct OMX_TUNNEL_T *omxCreateTunnel(struct OMX_COMPONENT_T *sourceComponent,uns
 OMX_ERRORTYPE omxEstablishTunnel(struct OMX_TUNNEL_T *tunnel);
 OMX_ERRORTYPE omxEnablePort(struct OMX_COMPONENT_T *component, unsigned int port, int wait);
 OMX_ERRORTYPE omxDisablePort(struct OMX_COMPONENT_T *component, unsigned int port, int wait);
+OMX_ERRORTYPE omxSetVideoSetExtraBuffers(struct OMX_COMPONENT_T *component);
+OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type);
 OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat,OMX_U32 framerate);
 OMX_ERRORTYPE omxSetFrameSize(struct OMX_COMPONENT_T *component, unsigned int width, unsigned int height);
 OMX_ERRORTYPE omxStartWithValidFrame(struct OMX_COMPONENT_T *component, int startWithValidFrame);

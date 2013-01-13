@@ -767,6 +767,7 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 
 	recorder = mythGetNextFreeRecorder(masterConnection, -1);
 	int recorderFound = 0;
+	int lastRecorderId = -1;
 	while ((recorderFound == 0) && (recorder != NULL)) {
 
 		logInfo( LOG_MYTHPROTOCOL,"Trying Recorder=%d, ip-address=%s, port=%d\n", recorder->recorderId, recorder->hostname, recorder->port);
@@ -778,10 +779,17 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 		}
 		else {
 			if (result != NULL) {
+				lastRecorderId = recorder->recorderId;
 				destroyMythConnection(result);
 			}
 			recorder = mythGetNextFreeRecorder(masterConnection, recorder->recorderId);
 		}
+
+		if ((recorder != NULL) && (recorder->recorderId < lastRecorderId)) {
+			// We have looped the list. Exit.
+			return NULL;
+		}
+
 	}
 
 	if (recorderFound == 0) {

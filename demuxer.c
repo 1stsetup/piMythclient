@@ -130,7 +130,7 @@ int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize
 	logInfo( LOG_DEMUXER_DEBUG,"Received request to read %d bytes.\n", bufferSize);
 
 	ssize_t readLen = mythFiletransferRequestBlock(demuxer->mythConnection, bufferSize);
-	logInfo( LOG_DEMUXER,"Myth will send %zd bytes of the requested %d.\n", readLen, bufferSize);
+	logInfo( LOG_DEMUXER_DEBUG,"Myth will send %zd bytes of the requested %d.\n", readLen, bufferSize);
 	if (readLen == 0) {
 		return 0;
 	}
@@ -155,7 +155,7 @@ int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize
 	}
 	logInfo( LOG_DEMUXER_DEBUG,"Received %zd bytes from connection.\n", readBufferLen);
 
-	logInfo( LOG_DEMUXER,"test %zd< %d && demuxer->nextFile = %s.\n", readLen, bufferSize, demuxer->nextFile);
+	logInfo( LOG_DEMUXER_DEBUG,"test %zd< %d && demuxer->nextFile = %s.\n", readLen, bufferSize, demuxer->nextFile);
 	if ((readLen < bufferSize) && (demuxer->nextFile != NULL)) {
 		// Swap transferConnection on our mythConnection.
 		logInfo( LOG_DEMUXER, "We received less bytes from myth than requested. We also have a next file %s. Probably due to a program change on the same channel.\n", demuxer->nextFile);
@@ -253,11 +253,37 @@ int showVideoPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 
 			logInfo(LOG_DEMUXER_DEBUG, "demuxer->videoPortSettingChanged set to true.\n");
 
-			omxErr = omxEstablishTunnel(demuxer->videoDecoderToSchedulerTunnel);
-			if(omxErr != OMX_ErrorNone) {
-				logInfo(LOG_DEMUXER, "Error establishing tunnel between video decoder and video scheduler components. (Error=0x%08x).\n", omxErr);
-				av_free_packet(packet);
-				return 1;
+			if (demuxer->deInterlace == 0) {
+				omxErr = omxEstablishTunnel(demuxer->videoDecoderToSchedulerTunnel);
+				if(omxErr != OMX_ErrorNone) {
+					logInfo(LOG_DEMUXER, "Error establishing tunnel between video decoder and video scheduler components. (Error=0x%08x).\n", omxErr);
+					av_free_packet(packet);
+					return 1;
+				}
+			}
+			else {
+				omxErr = omxEstablishTunnel(demuxer->videoDecoderToImageFXTunnel);
+				if(omxErr != OMX_ErrorNone) {
+					logInfo(LOG_DEMUXER, "Error establishing tunnel between video decoder and image_fx scheduler components. (Error=0x%08x).\n", omxErr);
+					av_free_packet(packet);
+					return 1;
+				}
+
+				omxErr = omxEstablishTunnel(demuxer->videoImageFXToSchedulerTunnel);
+				if(omxErr != OMX_ErrorNone) {
+					logInfo(LOG_DEMUXER, "Error establishing tunnel between video image_fx and video scheduler components. (Error=0x%08x).\n", omxErr);
+					av_free_packet(packet);
+					return 1;
+				}
+
+				omxErr = omxSetStateForComponent(demuxer->videoImageFX, OMX_StateExecuting);
+				if (omxErr != OMX_ErrorNone)
+				{
+					logInfo(LOG_DEMUXER, "video image_fx SetStateForComponent to OMX_StateExecuting. (Error=0x%08x).\n", omxErr);
+					av_free_packet(packet);
+					return 1;
+				}
+
 			}
 
 			omxErr = omxSetStateForComponent(demuxer->videoScheduler, OMX_StateExecuting);
@@ -625,6 +651,22 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 		}
 		logInfo(LOG_DEMUXER_DEBUG, "Created OMX video decoder component.\n");
 
+		if (demuxer->deInterlace == 1) {
+			demuxer->videoImageFX = omxCreateComponent("OMX.broadcom.image_fx" , OMX_IndexParamImageInit);
+			if (demuxer->videoImageFX == NULL) {
+				logInfo(LOG_DEMUXER, "Error creating OMX video image_fx component. (Error=0x%08x).\n", omx_error);
+				return omx_error;
+			}
+			logInfo(LOG_DEMUXER_DEBUG, "Created OMX video image_fx component.\n");
+
+			omxErr = omxSetVideoDeInterlace(demuxer->videoImageFX, 1);
+			if (omxErr != OMX_ErrorNone) {
+				logInfo(LOG_DEMUXER, "Error omxSetVideoDeInterlace on video image_fx component. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+
+		}
+
 		demuxer->videoRender = omxCreateComponent("OMX.broadcom.video_render" , OMX_IndexParamVideoInit);
 		if (demuxer->videoRender == NULL) {
 			logInfo(LOG_DEMUXER, "Error creating OMX video render component. (Error=0x%08x).\n", omx_error);
@@ -639,10 +681,33 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 		}
 		logInfo(LOG_DEMUXER_DEBUG, "Created OMX video scheduler component.\n");
 
-		demuxer->videoDecoderToSchedulerTunnel = omxCreateTunnel(demuxer->videoDecoder, demuxer->videoDecoder->outputPort, demuxer->videoScheduler, demuxer->videoScheduler->inputPort);
-		if (demuxer->videoDecoderToSchedulerTunnel == NULL) {
-			logInfo(LOG_DEMUXER, "Error creating tunnel between video decoder and video scheduler components. (Error=0x%08x).\n", omx_error);
-			return omx_error;
+		if (demuxer->deInterlace == 0) {
+			demuxer->videoDecoderToSchedulerTunnel = omxCreateTunnel(demuxer->videoDecoder, demuxer->videoDecoder->outputPort, demuxer->videoScheduler, demuxer->videoScheduler->inputPort);
+			if (demuxer->videoDecoderToSchedulerTunnel == NULL) {
+				logInfo(LOG_DEMUXER, "Error creating tunnel between video decoder and video scheduler components. (Error=0x%08x).\n", omx_error);
+				return omx_error;
+			}
+		}
+		else {
+			demuxer->videoDecoderToImageFXTunnel = omxCreateTunnel(demuxer->videoDecoder, demuxer->videoDecoder->outputPort, demuxer->videoImageFX, demuxer->videoImageFX->inputPort);
+			if (demuxer->videoDecoderToImageFXTunnel == NULL) {
+				logInfo(LOG_DEMUXER, "Error creating tunnel between video decoder and video image_fx components. (Error=0x%08x).\n", omx_error);
+				return omx_error;
+			}
+
+			demuxer->videoImageFXToSchedulerTunnel = omxCreateTunnel(demuxer->videoImageFX, demuxer->videoImageFX->outputPort, demuxer->videoScheduler, demuxer->videoScheduler->inputPort);
+			if (demuxer->videoImageFXToSchedulerTunnel == NULL) {
+				logInfo(LOG_DEMUXER, "Error creating tunnel between video image_fx and video scheduler components. (Error=0x%08x).\n", omx_error);
+				return omx_error;
+			}
+
+/*			omxErr = omxSetStateForComponent(demuxer->videoImageFX, OMX_StateIdle);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "video image_fx SetStateForComponent to OMX_StateIdle. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+*/
 		}
 
 		demuxer->videoSchedulerToRenderTunnel = omxCreateTunnel(demuxer->videoScheduler, demuxer->videoScheduler->outputPort, demuxer->videoRender, demuxer->videoRender->inputPort);
@@ -670,16 +735,17 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 			return omxErr;
 		}
 
-		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+//		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->r_frame_rate));
 
 		switch (demuxer->videoCodec->id) {
 		case AV_CODEC_ID_H264:
 			logInfo(LOG_DEMUXER, "This video stream has a codecid of H264.\n");
-			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingAVC, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingAVC, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->r_frame_rate));
 			break;
 		case AV_CODEC_ID_MPEG2VIDEO:
 			logInfo(LOG_DEMUXER, "This video stream has a codecid of MPEG2VIDEO.\n");
-			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingMPEG2, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
+			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingMPEG2, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->r_frame_rate));
 			break;
 		default:
 			logInfo(LOG_DEMUXER, "This video stream has a codecid I cannot handle yet. CodeID=%d.\n",demuxer->videoCodec->id);
@@ -726,6 +792,15 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 				return omxErr;
 			}
 	//	}
+
+		if (demuxer->deInterlace == 1) {
+			omxErr = omxSetVideoSetExtraBuffers(demuxer->videoDecoder);
+			if (omxErr != OMX_ErrorNone)
+			{
+				logInfo(LOG_DEMUXER, "video decoder omxSetVideoSetExtraBuffers. (Error=0x%08x).\n", omxErr);
+				return omxErr;
+			}
+		}
 
 		omxErr = omxAllocInputBuffers(demuxer->videoDecoder, 0);
 		if (omxErr != OMX_ErrorNone)
@@ -1036,7 +1111,6 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 	int64_t audioDTS = -1;
 	int64_t videoDTS = -1;
 	double tmpPTS = 0;
-	double tmpDTS = 0;
 	int validPTSValues = 0;
 
 #ifdef PI
@@ -1234,6 +1308,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	demuxer->swDecodeAudio = 1; // For now hardcoded.
 	demuxer->nextFile = NULL;
 	demuxer->lastFrameSize = 0;
+	demuxer->deInterlace = 0;
 	
 	if (pthread_mutex_init(&demuxer->threadLock, NULL) != 0)
 	{
@@ -1394,6 +1469,20 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	}
 
 	if(videoStream!=-1) {
+
+		// Determine if we need to deinterlace
+		if (fFormatContext->streams[videoStream]->r_frame_rate.den && fFormatContext->streams[videoStream]->r_frame_rate.num) {
+			// We have enough information to determine if we need to deintelace or not.
+			double realFrameRate = av_q2d(fFormatContext->streams[videoStream]->r_frame_rate);
+			double avgFrameRate = av_q2d(fFormatContext->streams[videoStream]->avg_frame_rate);
+			if (realFrameRate != avgFrameRate) {
+				logInfo( LOG_DEMUXER,"We need to deinterlace this stream.\n");
+				demuxer->deInterlace = 1;
+			}
+			else {
+				logInfo( LOG_DEMUXER,"This is a progressive stream. No deinterlace required.\n");
+			}
+		}
 
 		// Get a pointer to the codec context for the video stream
 		demuxer->videoCodecContext = avcodec_alloc_context3(fFormatContext->streams[videoStream]->codec->codec);

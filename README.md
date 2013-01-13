@@ -11,7 +11,7 @@ To compile on the pi do "make pi"
 
 To run do:
 
-./piMythclient -h &lt;hostname&gt;	[-p &lt;port&gt;]	-c &lt;channelnumber&gt; [-l &lt;comma separated list of logattributes to turn on&gt;] [-t &lt;language code&gt;] [-a &lt;0|1&gt;] [-v &lt;0|1&gt;] [-e &lt;0|1&gt;] [-e &lt;basename&gt;]
+./piMythclient -h &lt;hostname&gt;	[-p &lt;port&gt;]	-c &lt;channelnumber&gt; [-l &lt;comma separated list of logattributes to turn on&gt;] [-t &lt;language code&gt;] [-a &lt;0|1&gt;] [-v &lt;0|1&gt;] [-e &lt;0|1&gt;] [-r &lt;basename&gt;]
 
 * -h hostname of mythbackend or ip address
 * -p port of mythbackend. When not specified it will use the default
@@ -26,6 +26,7 @@ To run do:
 It will currently use hdmi as audio and video output.
 
 * For video currently only H264 and MPEG2VIDEO are supported. 
+* When it can detect it needs to deInterlace it will do it.
 * Audio is working but it is decoded in software and converted to stereo in software.
 
 Still working on trying to get it decoded in hardware. Probably need extra licenses for this which are not yet available from the Raspberry pi organisation.

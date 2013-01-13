@@ -37,24 +37,16 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <pthread.h>
+#include <errno.h>
 #include "connection.h"
 #include "globalFunctions.h"
 
-int createSocketIPv6(char *inHostname, uint16_t port)
+int createSocketIPv6(char *inHostname, uint16_t port, struct hostent *hp)
 {
-        char hostname[100];
 	int	sd = -1;
-	//struct sockaddr_in sin;
 	struct sockaddr_in6 pin;
-	struct hostent *hp;
-
-        strncpy(hostname,inHostname, 100);
-
-	/* go find out about the desired host machine */
-	if ((hp = gethostbyname2(hostname, AF_INET6)) == 0) {
-		logInfo( LOG_CONNECTION,"Error on gethostbyname2.\n");
-		return sd;
-	}
+	char *tmpStr = malloc(INET6_ADDRSTRLEN+1);
+	memset(tmpStr, 0, INET6_ADDRSTRLEN+1);
 
 	/* fill in the socket structure with host information */
 	memset(&pin, 0, sizeof(pin));
@@ -63,16 +55,19 @@ int createSocketIPv6(char *inHostname, uint16_t port)
 	pin.sin6_family = hp->h_addrtype;
 	memcpy((char *)&pin.sin6_addr, hp->h_addr, hp->h_length);
 	pin.sin6_port = htons(port);
+	logInfo( LOG_CONNECTION,"hp->h_length=%d\n", hp->h_length);
+
+	logInfo( LOG_CONNECTION,"Using ipv6 address '%s'\n", inet_ntop(AF_INET6, &pin.sin6_addr, tmpStr, INET6_ADDRSTRLEN+1));
 
 	/* grab an Internet domain socket */
 	if ((sd = socket(AF_INET6, SOCK_STREAM, 0)) == -1) {
-		logInfo( LOG_CONNECTION,"Could not create socket.\n");
+		logInfo( LOG_CONNECTION,"Could not create socket to host %s:%d.\n", inHostname, port);
 		return sd;
 	}
 
 	/* connect to PORT on HOST */
 	if (connect(sd,(struct sockaddr *)  &pin, sizeof(pin)) == -1) {
-		logInfo( LOG_CONNECTION,"Could not connect.\n");
+		logInfo( LOG_CONNECTION,"Could not connect to host %s:%d.(errno=%d)\n", inHostname, port, errno);
 		sd = -1;
 		return sd;
 	}
@@ -80,42 +75,55 @@ int createSocketIPv6(char *inHostname, uint16_t port)
 	return sd;
 }
 
-int createSocketIPv4(char *inHostname, uint16_t port)
+int createSocketIPv4(char *inHostname, uint16_t port, struct hostent *hp)
 {
-        char hostname[100];
 	int	sd = -1;
-	//struct sockaddr_in sin;
 	struct sockaddr_in pin;
-	struct hostent *hp;
-
-        strncpy(hostname,inHostname, 100);
-
-	/* go find out about the desired host machine */
-	if ((hp = gethostbyname(hostname)) == NULL) {
-		logInfo( LOG_CONNECTION,"Error on gethostbyname.\n");
-		return sd;
-	}
 
 	/* fill in the socket structure with host information */
 	memset(&pin, 0, sizeof(pin));
 	pin.sin_family = AF_INET;
 	pin.sin_addr.s_addr = ((struct in_addr *)(hp->h_addr))->s_addr;
 	pin.sin_port = htons(port);
+	logInfo( LOG_CONNECTION,"hp->h_length=%d\n", hp->h_length);
 
 	/* grab an Internet domain socket */
 	if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-		logInfo( LOG_CONNECTION,"Could not create socket.\n");
+		logInfo( LOG_CONNECTION,"Could not create socket to host %s:%d.\n", inHostname, port);
 		return sd;
 	}
 
 	/* connect to PORT on HOST */
 	if (connect(sd,(struct sockaddr *)  &pin, sizeof(pin)) == -1) {
-		logInfo( LOG_CONNECTION,"Could not connect.\n");
+		logInfo( LOG_CONNECTION,"Could not connect to host %s:%d.\n", inHostname, port);
 		sd = -1;
 		return sd;
 	}
 
 	return sd;
+}
+
+int createSocket(char *inHostname, uint16_t port)
+{
+	struct hostent *hp;
+
+	if ((hp = gethostbyname2(inHostname, AF_INET)) == NULL) {
+		if ((hp = gethostbyname2(inHostname, AF_INET6)) == NULL) {
+			logInfo( LOG_CONNECTION,"Error on gethostbyname.\n");
+			return -1;
+		}
+	}
+
+	if (hp->h_addrtype == AF_INET) {
+		return createSocketIPv4(inHostname, port, hp);
+	}
+	else {
+		if (hp->h_addrtype == AF_INET6) {
+			return createSocketIPv6(inHostname, port, hp);
+		}
+	}
+
+	return -1;
 }
 
 struct CONNECTION_T *createConnection(char *inHostname, uint16_t port)
@@ -124,12 +132,15 @@ struct CONNECTION_T *createConnection(char *inHostname, uint16_t port)
 
 	struct CONNECTION_T *result = (struct CONNECTION_T *)malloc(sizeof(struct CONNECTION_T));
 
-	if (indexOf(inHostname, ":") > -1) {
+/*	if (indexOf(inHostname, ":") > -1) {
 		result->socket = createSocketIPv6(inHostname, port);
 	}
 	else {
 		result->socket = createSocketIPv4(inHostname, port);
 	}
+*/
+	result->socket = createSocket(inHostname, port);
+
 	if (result->socket < 0) {
 		free(result);
 		logInfo( LOG_CONNECTION,"result->socket < 0.\n");

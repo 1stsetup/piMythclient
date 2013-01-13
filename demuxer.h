@@ -81,10 +81,13 @@ struct DEMUXER_T{
 	char *nextFile;
 
 	struct OMX_COMPONENT_T *videoDecoder;
+	struct OMX_COMPONENT_T *videoImageFX;
 	struct OMX_COMPONENT_T *videoRender;
 	struct OMX_COMPONENT_T *videoScheduler;
 	struct OMX_TUNNEL_T *videoDecoderToSchedulerTunnel;
 	struct OMX_TUNNEL_T *videoSchedulerToRenderTunnel;
+	struct OMX_TUNNEL_T *videoDecoderToImageFXTunnel;
+	struct OMX_TUNNEL_T *videoImageFXToSchedulerTunnel;
 	struct OMX_TUNNEL_T *clockToVideoSchedulerTunnel;
 
 	struct OMX_COMPONENT_T *audioDecoder;
@@ -109,6 +112,8 @@ struct DEMUXER_T{
 	int playAudio;
 	int audioPassthrough;
 	int swDecodeAudio;
+
+	int deInterlace;
 
 	int videoPortSettingChanged;
 	int audioPortSettingChanged;

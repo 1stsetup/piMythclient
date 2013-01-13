@@ -547,12 +547,12 @@ OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STA
 	}
 
 
-	logInfo(LOG_OMX_DEBUG, "before OMX_SendCommand.\n");
+	logInfo(LOG_OMX_DEBUG, "before OMX_SendCommand (component=%s).\n", component->componentName);
 	omx_err = OMX_SendCommand(component->handle, OMX_CommandStateSet, state, 0);
-	logInfo(LOG_OMX_DEBUG, "after OMX_SendCommand.\n");
+	logInfo(LOG_OMX_DEBUG, "after OMX_SendCommand (component=%s).\n", component->componentName);
 	
 	if (omx_err != OMX_ErrorNone) {
-		logInfo(LOG_OMX_DEBUG, "omx_err != OMX_ErrorNone.\n");
+		logInfo(LOG_OMX_DEBUG, "omx_err != OMX_ErrorNone (component=%s).\n", component->componentName);
 		if(omx_err == OMX_ErrorSameState) {
 			omx_err = OMX_ErrorNone;
 		}
@@ -561,9 +561,9 @@ OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STA
 		}
 	}
 	else {
-		logInfo(LOG_OMX_DEBUG, "omx_err == OMX_ErrorNone.\n");
-		omx_err = omxWaitForCommandComplete(component, OMX_CommandStateSet, state, 1000);
-		logInfo(LOG_OMX_DEBUG, "after omxWaitForCommandComplete.\n");
+		logInfo(LOG_OMX_DEBUG, "omx_err == OMX_ErrorNone (component=%s).\n", component->componentName);
+		omx_err = omxWaitForCommandComplete(component, OMX_CommandStateSet, state, 50000);
+		logInfo(LOG_OMX_DEBUG, "after omxWaitForCommandComplete (component=%s).\n", component->componentName);
 		if(omx_err == OMX_ErrorSameState) {
 			logInfo(LOG_OMX, "%s ignore OMX_ErrorSameState\n", component->componentName);
 			return OMX_ErrorNone;
@@ -571,7 +571,7 @@ OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STA
 	}
 
 
-	logInfo(LOG_OMX_DEBUG, "end of omxSetStateForComponent.\n");
+	logInfo(LOG_OMX_DEBUG, "end of omxSetStateForComponent (component=%s).\n", component->componentName);
 	return omx_err;
 }
 
@@ -836,6 +836,49 @@ theErrorEnd:
 	logInfo(LOG_OMX_DEBUG, "Error creating OMX clock component.\n");
 	free(newClock);
 	return NULL;
+}
+
+OMX_ERRORTYPE omxSetVideoSetExtraBuffers(struct OMX_COMPONENT_T *component)
+{
+	OMX_PARAM_U32TYPE extraBuffers;
+	OMX_INIT_STRUCTURE(extraBuffers);
+	extraBuffers.nU32 = 3;
+
+	OMX_ERRORTYPE omxErr;
+	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamBrcmExtraBuffers, &extraBuffers);
+
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error SetParameter OMX_IndexParamBrcmExtraBuffers for component %s omxErr(0x%08x)\n", component->componentName, (int)omxErr);
+		return omxErr;
+	}
+
+	return OMX_ErrorNone;
+}
+
+/*
+ * type == 0 OMX_ImageFilterDeInterlaceLineDouble,
+ * type == 1 OMX_ImageFilterDeInterlaceAdvanced,
+ */
+
+OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type)
+{
+	OMX_CONFIG_IMAGEFILTERPARAMSTYPE image_filter;
+	OMX_INIT_STRUCTURE(image_filter);
+
+	image_filter.nPortIndex = component->outputPort;
+	image_filter.nNumParams = 1;
+	image_filter.nParams[0] = 3;
+	image_filter.eImageFilter = (type == 1) ? OMX_ImageFilterDeInterlaceAdvanced : OMX_ImageFilterDeInterlaceLineDouble;
+
+	OMX_ERRORTYPE omxErr;
+	omxErr = OMX_SetConfig(component->handle, OMX_IndexConfigCommonImageFilterParameters, &image_filter);
+
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error SetConfig OMX_IndexConfigCommonImageFilterParameters for port %d status on component %s omxErr(0x%08x)\n", component->outputPort, component->componentName, (int)omxErr);
+		return omxErr;
+	}
+
+	return OMX_ErrorNone;
 }
 
 OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat,OMX_U32 framerate)
