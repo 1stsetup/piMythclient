@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <sys/select.h>
 #include <termios.h>
+#include <signal.h>
 
 #include "connection.h"
 #include "globalFunctions.h"
@@ -62,6 +63,24 @@ struct MYTH_CONNECTION_T *masterConnection = NULL;
 struct MYTH_CONNECTION_T *slaveConnection = NULL;
 struct MYTH_CONNECTION_T *monitorConnection = NULL;
 
+	int doStop = 0;
+
+
+void catchedCtrlC(int sig)
+{
+	logInfo( LOG_CLIENT,"Ctrl+c was pressed going to stop cleanly.\n");
+	signal(SIGINT, SIG_DFL);
+	doStop = 1;
+
+}
+
+void catchedKill(int sig)
+{
+	logInfo( LOG_CLIENT,"Kill signal was send going to stop cleanly.\n");
+	doStop = 1;
+}
+
+
 void changeSTDIN()
 {
 	// This will change the stdin in to non line editing mode.
@@ -81,6 +100,33 @@ void changeSTDIN()
 	}
 }
 
+//void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t border_colour, uint32_t fill_colour, int doFill)
+
+void doPaint(struct OSD_T *osd)
+{
+	logInfo( LOG_CLIENT,"1. Here we are.\n");
+
+	osdClear(osd);
+	osdDrawRect(osd, 10, 10, 110, 110, GRAPHICS_RGBA32(255,255,255,125), GRAPHICS_RGBA32(0,255,0,125), 1);
+	osdDrawRect(osd, 20, 20, 80, 80, GRAPHICS_RGBA32(255,255,255,125), GRAPHICS_RGBA32(0,0,255,255), 1);
+
+	logInfo( LOG_CLIENT,"2. Here we are.\n");
+}
+
+char *programTitle = NULL;
+
+void doPaintTitle(struct OSD_T *osd)
+{
+	logInfo( LOG_CLIENT,"1. Here we are.\n");
+
+	osdClear(osd);
+	osdDrawRect(osd, 10, 10, 1000, 110, GRAPHICS_RGBA32(255,255,255,255), GRAPHICS_RGBA32(0,255,0,125), 1);
+
+	osdDrawText(osd, 30, 30, programTitle, 50, GRAPHICS_RGBA32(255,255,255,255), GRAPHICS_RGBA32(255,0,0,255), 1);
+
+	logInfo( LOG_CLIENT,"2. Here we are.\n");
+}
+
 int main(int argc, char *argv[])
 {
 	int error = 0;
@@ -98,16 +144,18 @@ int main(int argc, char *argv[])
 	uint32_t newChannel = 0;
 	uint32_t newChannel2 = 0;
 	uint32_t currentChannel = 0;
-	int doStop = 0;
 	int channelChanged = 0;
 	int audioPassthrough = 1;
 	int showVideo = 1;
 	int playAudio = 1;
 	char *recordingFilename = NULL;
+	char *newFileName = NULL;
 
 	int c;
 	opterr = 0;
 
+	signal(SIGINT, catchedCtrlC);
+	signal(SIGKILL, catchedKill);
 /*
 	-h <hostname>
 	-p <port>
@@ -164,18 +212,25 @@ int main(int argc, char *argv[])
 //	tvserviceHDMIPowerOnBest(0, 1080, 720, 50, 0);
 //	sleep(1);
 
- 	struct OSD_T *osd2 = osdCreate(1, 0, 0, GRAPHICS_RGBA32(255,0,0,0xff));
+ 	struct OSD_T *osd2 = osdCreate(1, 0, 0, GRAPHICS_RGBA32(255,0,0,0xff), &doPaint);
 	if (osd2 == NULL) {
 		printf("osdCreate osd2 error.\n");
 		exit(1);
 	}
 
-	osdClear(osd2);
-	osdDrawRect(osd2, 10, 10, 110, 110, GRAPHICS_RGBA32(0,255,0,125));
-	osdDrawRect(osd2, 20, 20, 80, 80, GRAPHICS_RGBA32(0,0,255,255));
+ 	struct OSD_T *osdTitle = osdCreate(1, 0, 0, GRAPHICS_RGBA32(0,0,0,0x0), &doPaintTitle);
+	if (osdTitle == NULL) {
+		printf("osdCreate osdTitle error.\n");
+		exit(1);
+	}
+
+	if (osdSetFont(osdTitle, "/usr/share/fonts/truetype/freefont/FreeSans.ttf") != 0) {
+		printf("osdSetFont could not set font.\n");
+		exit(1);
+	}
 
 //	osdDrawText(osd2, 200, 200, "DIT IS EEN TEST BERICHT", 50);
-	osdDraw(osd2);
+	osdShow(osd2);
 
 /*	struct OSD_T *osd1 = osdCreate(2, 500, 500, 0x80);
 	if (osd1 == NULL) {
@@ -192,18 +247,19 @@ int main(int argc, char *argv[])
 	}*/
 
 	logInfo( LOG_CLIENT,"the end.\n");
-	sleep(1);
+	sleep(2);
 
 //	osdDestroy(osd1);
-	osdDestroy(osd2);
+//	osdDestroy(osd2);
+	osdHide(osd2);
 
 //	tvserviceDestroy();
-	bcm_host_deinit();
+//	bcm_host_deinit();
 
 //	exit(1);
 #else
 	struct OSD_T *img = osdCreate(1, 0, 0);
-	osdDrawText(img, 0, 0, "Hello", 11);
+//	osdDrawText(img, 0, 0, "Hello", 11);
 	osdDestroy(img);
 #endif
 
@@ -270,107 +326,104 @@ int main(int argc, char *argv[])
 		}
 	}
 	
+	ssize_t bytesRead;
+
 	if (error >= 0) {
 		int firstStartRecording = 0;
+		int dataAvailable = 0;
+
+		logInfo( LOG_CLIENT,"Going to start main loop.\n");
 		while (doStop == 0) {
+
+			dataAvailable = mythDataAvailableOnConnection(monitorConnection->connection);
+
 			memcpy(&working_fd_set, &our_fd_set, sizeof(our_fd_set));
 
-			timeout.tv_sec  = 1;
-			timeout.tv_usec = 0;
+			timeout.tv_sec  = 0;
+			if (dataAvailable == 0) {
+				timeout.tv_usec = 10000;
+			}
+			else {
+				timeout.tv_usec = 10000;
+			}
 
 			rc = select(maxSocket+1, &working_fd_set, NULL, NULL, &timeout);
 			if (rc < 0) {
 				perror("main: select error");
-				exit(1);
+				doStop = 1;
+				continue;
 			}
 
 			if (rc == 0) {
 				//logInfo( LOG_CLIENT," __ main: select timeout.\n");
 			}
 
-			if (rc > 0) {
+			if ((demuxer != NULL) && (newFileName != NULL) && (demuxer->newProgram == 1)) {
+				if (mythGetRecordingDetails(slaveConnection, newFileName) >= 0) {
+					demuxer->newProgram = 0;
+					programTitle = getStringAtListIndex(slaveConnection->currentRecording, 0);
+					logInfo(LOG_CLIENT, "Programname: %s.\n", getStringAtListIndex(slaveConnection->currentRecording, 0));
+					osdShowWithTimeoutSeconds(osdTitle, 10);
+				}
+			}
 
-				if ((FD_ISSET(monitorConnection->connection->socket, &working_fd_set)) && (changingChannel == 0)) {
+			if ((dataAvailable == 1) || (rc > 0)) {
 
-					readResponse(monitorConnection->connection, &response[0], 6000);
-					// We need to trigger in BACKEND_MESSAGE[]:[]SYSTEM_EVENT REC_STARTED CARDID 29 CHANID 11010 STARTTIME 2013-01-09T20:00:05Z RECSTATUS 0 SENDER xen01[]:[]empty
-					if ((checkResponse(&response[0], "BACKEND_MESSAGE[]:[]SYSTEM_EVENT REC_STARTED CARDID") != 0) && (recordingFilename == NULL)) {
-						// We have an update see if it is for us.
-						tmpDetails = convertStrToList(&response[0], " ");
-						if (slaveConnection->recorderId == atoi(getStringAtListIndex(tmpDetails,3))) {  // Check recorderId
-							if (firstStartRecording == 1) {
-								char *newFileName = mythConvertToFilename( getStringAtListIndex(tmpDetails,5), getStringAtListIndex(tmpDetails,7));
-								if (slaveConnection->streaming == 0) {
-									logInfo(LOG_CLIENT, "Going to request file=%s.\n", newFileName);
-									slaveConnection->channelId = atoi(getStringAtListIndex(tmpDetails,5));
-									slaveConnection->transferConnection = mythPrepareNextProgram(slaveConnection, newFileName); 
-									if (slaveConnection->transferConnection != NULL) {
-										logInfo( LOG_CLIENT," *********************> starting demuxer thread.\n");
-										sleep(5); // We let it sleep for 5 seconds so mythtv can buffer up.
-										demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
-										if (demuxer == NULL) {
-											logInfo( LOG_CLIENT," *********************> Error starting demuxer thread.\n");
+				if (((dataAvailable == 1) || (FD_ISSET(monitorConnection->connection->socket, &working_fd_set))) && (changingChannel == 0)) {
+
+					bytesRead = readResponse(monitorConnection->connection, &response[0], 6000, 0);
+					if (bytesRead > 0) {
+						logInfo(LOG_CLIENT, "Response: %s\n", &response[0]);
+						// We need to trigger in BACKEND_MESSAGE[]:[]SYSTEM_EVENT REC_STARTED CARDID 29 CHANID 11010 STARTTIME 2013-01-09T20:00:05Z RECSTATUS 0 SENDER xen01[]:[]empty
+						if ((checkResponse(&response[0], "BACKEND_MESSAGE[]:[]SYSTEM_EVENT REC_STARTED CARDID") != 0) && (recordingFilename == NULL)) {
+							// We have an update see if it is for us.
+							tmpDetails = convertStrToList(&response[0], " ");
+							if (slaveConnection->recorderId == atoi(getStringAtListIndex(tmpDetails,3))) {  // Check recorderId
+								if (firstStartRecording == 1) {
+
+									newFileName = mythConvertToFilename( getStringAtListIndex(tmpDetails,5), getStringAtListIndex(tmpDetails,7));
+
+									if (slaveConnection->streaming == 0) {
+
+										if (mythGetRecordingDetails(slaveConnection, newFileName) >= 0) {
+											programTitle = getStringAtListIndex(slaveConnection->currentRecording, 0);
+											logInfo(LOG_CLIENT, "Programname: %s.\n", getStringAtListIndex(slaveConnection->currentRecording, 0));
+											osdShowWithTimeoutSeconds(osdTitle, 10);
 										}
-										else {
-											slaveConnection->streaming = 1;
+
+										logInfo(LOG_CLIENT, "Going to request file=%s.\n", newFileName);
+										slaveConnection->channelId = atoi(getStringAtListIndex(tmpDetails,5));
+										slaveConnection->transferConnection = mythPrepareNextProgram(slaveConnection, newFileName); 
+										if (slaveConnection->transferConnection != NULL) {
+											logInfo( LOG_CLIENT," *********************> starting demuxer thread.\n");
+											sleep(5); // We let it sleep for 5 seconds so mythtv can buffer up.
+											demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
+											if (demuxer == NULL) {
+												logInfo( LOG_CLIENT," *********************> Error starting demuxer thread.\n");
+											}
+											else {
+												slaveConnection->streaming = 1;
+											}
 										}
 									}
+									else {
+										logInfo(LOG_CLIENT, "Change of program on same channel. Will tell demuxer it needs to stream from a new file %s.\n", newFileName);
+										demuxerSetNextFile(demuxer, newFileName);
+									}
+									free(newFileName);
 								}
 								else {
-									logInfo(LOG_CLIENT, "Change of program on same channel. Will tell demuxer it needs to stream from a new file %s.\n", newFileName);
-									demuxerSetNextFile(demuxer, newFileName);
-								}
-								free(newFileName);
-							}
-							else {
-								// We do this because when the first start recording is seen mythtv is still tuning in on the channel. 
-								// And will stop this recording when tuned. Then it will start the real recording. 
-								logInfo(LOG_CLIENT, "First startrecording we see. We wait for the next one.\n");
-								firstStartRecording++;
-							}
-						}
-						freeList(tmpDetails);
-
-/*						if ((strcmp(getStringAtListIndex(tmpDetails,6), getStringAtListIndex(slaveConnection->currentRecording,6)) == 0) &&
-							(strcmp(getStringAtListIndex(tmpDetails,25), getStringAtListIndex(slaveConnection->currentRecording,25)) > 0)){
-							// it is for us update currentRecording details. pos 53
-							if (slaveConnection->streaming == 1) {
-								// we are streaming. Close file and we will reopen it when data is available.
-								logInfo( LOG_CLIENT,"main: We need to start a new stream.\n");
-								if (p != NULL) {
-									fclose(p);
-								}
-								// Stop stream.
-								demuxerStop(demuxer);
-								demuxer = NULL;
-
-								stopLiveTVStream(slaveConnection);
-								logInfo( LOG_CLIENT,"main: Stopped stream.\n");
-							}
-							freeList(slaveConnection->currentRecording);
-							slaveConnection->currentRecording = tmpDetails;
-							logInfo( LOG_CLIENT," it is for us update currentRecording details. data=%s\n",convertListToString(slaveConnection->currentRecording, "[]:[]"));
-						}
-*/					}
-
-/*					if ((slaveConnection->streaming == 0) && (checkResponse(&response[0], "BACKEND_MESSAGE[]:[]UPDATE_FILE_SIZE") != 0) && (recordingFilename == NULL)) {
-						// We have an update_file_size see if it is for us.
-						tmpDetails = convertStrToList(&response[0], " ");
-						logInfo( LOG_CLIENT," We have an update_file_size see if it is for us. newChannelId=%s, oldChannelId=%s\n", getStringAtListIndex(tmpDetails,1),getStringAtListIndex(slaveConnection->currentRecording,6));
-						if (strcmp(getStringAtListIndex(tmpDetails,1), getStringAtListIndex(slaveConnection->currentRecording,6)) == 0) {
-							// it is for us. Start receiving data.
-							logInfo( LOG_CLIENT," it is for us. Start receiving data.\n");
-							if (startLiveTVStream(slaveConnection) >= 0) {
-								logInfo( LOG_CLIENT," *********************> starting demuxer thread.\n");
-								demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
-								if (demuxer == NULL) {
-									logInfo( LOG_CLIENT," *********************> Error starting demuxer thread.\n");
+									// We do this because when the first start recording is seen mythtv is still tuning in on the channel. 
+									// And will stop this recording when tuned. Then it will start the real recording. 
+									logInfo(LOG_CLIENT, "First startrecording we see. We wait for the next one.\n");
+									firstStartRecording++;
 								}
 							}
+							freeList(tmpDetails);
+
 						}
-						freeList(tmpDetails);
 					}
-*/				}
+				}
 
 				if (FD_ISSET(STDIN, &working_fd_set)) {
 					if (read(STDIN, &stdinBuffer, 1) == 1) {
@@ -379,7 +432,7 @@ int main(int argc, char *argv[])
 							newChannel = (newChannel * 10) + (stdinBuffer - 48);
 							logInfo(LOG_CLIENT, "newChannel=%d.\n", newChannel);
 						}
-						if ((stdinBuffer == 10) && (recordingFilename != NULL)) {
+						if ((stdinBuffer == 10) && (recordingFilename == NULL)) {
 							channelChanged = 0;
 							if (newChannel != 0) { // enter key
 								// Received enter. Switch to new channel when it is not 0.
@@ -404,11 +457,12 @@ int main(int argc, char *argv[])
 
 								demuxerStop(demuxer);
 								demuxer = NULL;
-								if (slaveConnection->streaming == 1) {
+								if ((slaveConnection != NULL) && (slaveConnection->streaming == 1)) {
 									stopLiveTVStream(slaveConnection);
 								}
 
 								destroyMythConnection(slaveConnection);
+								firstStartRecording = 0;
 								slaveConnection = startLiveTV(masterConnection, newChannel2);
 								if (slaveConnection == NULL) {
 									error = -1;
@@ -426,6 +480,7 @@ int main(int argc, char *argv[])
 						}
 
 						if (stdinBuffer == 27) {  // ESC key
+							osdHide(osdTitle);
 							newChannel = 0;
 						}
 
@@ -440,18 +495,26 @@ int main(int argc, char *argv[])
 
 						if (stdinBuffer == 113) { // q key for quit
 							logInfo(LOG_CLIENT, "Received quit from userconsole.\n");
-							demuxerStop(demuxer);
-							if (slaveConnection->streaming == 1) {
-								stopLiveTVStream(slaveConnection);
-							}
 							doStop = 1;
+							continue;
 						}
 					}
 				}			
 			}
+
+			if ((osdTitle->visible) && (osdTitle->timeout > 0) && ((nowInMicroseconds() - osdTitle->startTime) >= osdTitle->timeout)) {
+				logInfo(LOG_CLIENT, "Hiding osdTitle.\n");
+				osdHide(osdTitle);
+			}
 		}
 	}
 
+	demuxerStop(demuxer);
+	demuxer = NULL;
+
+	if ((slaveConnection != NULL) && (slaveConnection->streaming == 1)) {
+		stopLiveTVStream(slaveConnection);
+	}
 
 	destroyMythConnection(masterConnection);
 	destroyMythConnection(slaveConnection);

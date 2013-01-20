@@ -72,7 +72,8 @@ struct MYTH_RECORDER_T{
 #define ANN_MONITOR		3
 
 ssize_t sendCommand(struct CONNECTION_T *connection, char *inCommand);
-ssize_t readResponse(struct CONNECTION_T *connection, char *outResponse, size_t responseLength);
+int mythDataAvailableOnConnection(struct CONNECTION_T *connection);
+ssize_t readResponse(struct CONNECTION_T *connection, char *outResponse, size_t responseLength, int doWait);
 int sendCommandAndReadReply(struct MYTH_CONNECTION_T *connection, char *inCommand, char *outResponse, size_t responseLength);
 int checkResponse(char *response, char *needle);
 struct MYTH_CONNECTION_T *createMythConnection(char *inHostname, uint16_t port, int annType);
@@ -84,6 +85,7 @@ char *mythConvertToFilename(char *channelId, char *startTime);
 struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection, int channelNum);
 int startLiveTVStream(struct MYTH_CONNECTION_T *mythConnection);
 int stopLiveTVStream(struct MYTH_CONNECTION_T *mythConnection);
+int mythGetRecordingDetails(struct MYTH_CONNECTION_T *mythConnection, char *recordingFilename);
 struct MYTH_CONNECTION_T *checkRecorderProgram(struct MYTH_CONNECTION_T *masterConnection, char *recordingFilename);
 int playRecorderProgram(struct MYTH_CONNECTION_T *mythConnection);
 void mythSetNewTransferConnection(struct MYTH_CONNECTION_T *slaveConnection, struct MYTH_CONNECTION_T *newTransferConnection);

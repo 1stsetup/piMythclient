@@ -45,6 +45,8 @@
 #define LOG_CLIENT_DEBUG	(1<<12)
 #define LOG_OMX			(1<<13)
 #define LOG_OMX_DEBUG		(1<<14)
+#define LOG_FREETYPE		(1<<15)
+#define LOG_FREETYPE_DEBUG	(1<<16)
 #define LOG_ALL			0xFFFFFFFF
 
 void setLogLevel(uint32_t level) ;

@@ -30,6 +30,8 @@
 #include "EGL/egl.h"
 #include "EGL/eglext.h"
 
+#include "font.h"
+
 #ifdef PI
 
 #include <VG/vgu.h>
@@ -78,28 +80,37 @@ struct OSD_T{
 	DISPMANX_UPDATE_HANDLE_T vc_dispmanx_update;
 	DISPMANX_ELEMENT_HANDLE_T dispman_element;
 	EGLDisplay eglDisplay;
-	EGLSurface surface;
+	EGLSurface finalSurface;
 	EGLContext context;
 
 	VGPath path;
-	VGPaint paint;
+	VGPaint fillPaint;
+	VGPaint strokePaint;
 	uint32_t fill_colour;
 
 	struct SIMPLELISTITEM_T *actions;
 #endif
+	FT_Face fontFace;
+	int useStatic;
+	void (*doPaint)(struct OSD_T *osd);
+	uint64_t timeout;
+	uint64_t startTime;
 };
 
 #ifdef PI
-struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour);
+struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour, void (*doPaint)(struct OSD_T *osd));
 #else
 struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height);
 #endif
 
 void osdDestroy(struct OSD_T *osd);
-void osdDraw(struct OSD_T *osd);
+void osdPaint(struct OSD_T *osd);
+void osdShow(struct OSD_T *osd);
 void osdHide(struct OSD_T *osd);
 void osdClear(struct OSD_T *osd);
-int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size);
+int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size, uint32_t border_colour, uint32_t fill_colour, int doFill);
 void osdSetColor(uint32_t color);
-void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t fill_colour);
-
+void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t border_colour, uint32_t fill_colour, int doFill);
+int osdSetFont(struct OSD_T *osd, char *fontFile);
+void osdShowWithTimeoutMicroseconds(struct OSD_T *osd, uint64_t timeout);
+void osdShowWithTimeoutSeconds(struct OSD_T *osd, uint64_t timeout);

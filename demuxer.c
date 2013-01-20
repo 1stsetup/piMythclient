@@ -40,7 +40,9 @@
 #include "connection.h"
 #include "mythProtocol.h"
 #include "demuxer.h"
+#include "omxCore.h"
 #include "omxVideo.h"
+#include "omxAudio.h"
 
 
 int ffmpeg_inited = 0;
@@ -168,6 +170,7 @@ int demuxerReadPacket(struct DEMUXER_T *demuxer, uint8_t *buffer, int bufferSize
 		}
 		free(demuxer->nextFile);
 		demuxer->nextFile = NULL;
+		demuxer->newProgram = 1;
 	}
 
 	return readBufferLen;
@@ -253,6 +256,7 @@ int showVideoPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 
 			logInfo(LOG_DEMUXER_DEBUG, "demuxer->videoPortSettingChanged set to true.\n");
 
+
 			if (demuxer->deInterlace == 0) {
 				omxErr = omxEstablishTunnel(demuxer->videoDecoderToSchedulerTunnel);
 				if(omxErr != OMX_ErrorNone) {
@@ -262,6 +266,44 @@ int showVideoPacket(struct DEMUXER_T *demuxer, AVPacket *packet, double pts)
 				}
 			}
 			else {
+
+				omxShowVideoInterlace(demuxer->videoDecoder);
+
+				OMX_PARAM_PORTDEFINITIONTYPE portImage;
+				OMX_INIT_STRUCTURE(portImage);
+				portImage.nPortIndex = demuxer->videoDecoder->outputPort;
+
+				omxErr = OMX_GetParameter(demuxer->videoDecoder->handle, OMX_IndexParamPortDefinition, &portImage);
+				if (omxErr != OMX_ErrorNone) {
+					logInfo(LOG_DEMUXER, "Error OMX_IndexParamPortDefinition for video decoder components. (Error=0x%08x).\n", omxErr);
+					return 1;
+				}
+
+				if ((portImage.format.video.nFrameWidth == demuxer->formatContext->streams[demuxer->videoStream]->codec->width) && (portImage.format.video.nFrameHeight == demuxer->formatContext->streams[demuxer->videoStream]->codec->height)) {
+					logInfo(LOG_DEMUXER, "Demuxer has first frame available for image_fx.\n");
+
+					omxDisablePort(demuxer->videoImageFX, demuxer->videoImageFX->outputPort, 0);
+					omxDisablePort(demuxer->videoImageFX, demuxer->videoImageFX->inputPort, 0);
+
+					portImage.nPortIndex = demuxer->videoImageFX->inputPort;
+					omxErr = OMX_SetParameter(demuxer->videoImageFX->handle, OMX_IndexParamPortDefinition, &portImage);
+					if (omxErr != OMX_ErrorNone) {
+						logInfo(LOG_DEMUXER, "Error OMX_IndexParamPortDefinition for video image_fx components inputPort. (Error=0x%08x).\n", omxErr);
+						return 1;
+					}
+
+					portImage.nPortIndex = demuxer->videoImageFX->outputPort;
+					omxErr = OMX_SetParameter(demuxer->videoImageFX->handle, OMX_IndexParamPortDefinition, &portImage);
+					if (omxErr != OMX_ErrorNone) {
+						logInfo(LOG_DEMUXER, "Error OMX_IndexParamPortDefinition for video image_fx components outputPort. (Error=0x%08x).\n", omxErr);
+						return 1;
+					}
+
+				}
+				else {
+					logInfo(LOG_DEMUXER, "Demuxer does NOT have the first frame available for image_fx!!!!!!!!\n");
+				}
+
 				omxErr = omxEstablishTunnel(demuxer->videoDecoderToImageFXTunnel);
 				if(omxErr != OMX_ErrorNone) {
 					logInfo(LOG_DEMUXER, "Error establishing tunnel between video decoder and image_fx scheduler components. (Error=0x%08x).\n", omxErr);
@@ -627,8 +669,8 @@ double ffmpegConvertTimestamp(struct DEMUXER_T *demuxer, int64_t pts, AVRational
 	if (pts == (int64_t)AV_NOPTS_VALUE)
 		return DVD_NOPTS_VALUE;
 
-//	if (demuxer->fFormatContext->start_time != (int64_t)AV_NOPTS_VALUE)
-//	new_pts += demuxer->fFormatContext->start_time;
+//	if (demuxer->formatContext->start_time != (int64_t)AV_NOPTS_VALUE)
+//	new_pts += demuxer->formatContext->start_time;
 
 	new_pts -=demuxer->startPTS;
 
@@ -735,17 +777,17 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 			return omxErr;
 		}
 
-//		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->avg_frame_rate));
-		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->r_frame_rate));
+//		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->formatContext->streams[demuxer->videoStream]->avg_frame_rate));
+		logInfo(LOG_DEMUXER, "This video stream has a framerate of %f fps.\n", av_q2d(demuxer->formatContext->streams[demuxer->videoStream]->r_frame_rate));
 
 		switch (demuxer->videoCodec->id) {
 		case AV_CODEC_ID_H264:
 			logInfo(LOG_DEMUXER, "This video stream has a codecid of H264.\n");
-			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingAVC, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->r_frame_rate));
+			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingAVC, av_q2d(demuxer->formatContext->streams[demuxer->videoStream]->avg_frame_rate));
 			break;
 		case AV_CODEC_ID_MPEG2VIDEO:
 			logInfo(LOG_DEMUXER, "This video stream has a codecid of MPEG2VIDEO.\n");
-			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingMPEG2, av_q2d(demuxer->fFormatContext->streams[demuxer->videoStream]->r_frame_rate));
+			omxErr = omxSetVideoCompressionFormatAndFrameRate(demuxer->videoDecoder, OMX_VIDEO_CodingMPEG2, av_q2d(demuxer->formatContext->streams[demuxer->videoStream]->avg_frame_rate));
 			break;
 		default:
 			logInfo(LOG_DEMUXER, "This video stream has a codecid I cannot handle yet. CodeID=%d.\n",demuxer->videoCodec->id);
@@ -757,15 +799,15 @@ OMX_ERRORTYPE demuxerInitOMXVideo(struct DEMUXER_T *demuxer)
 			return omxErr;
 		}
 
-		logInfo(LOG_DEMUXER, "This video stream has a framesize of %dx%d.\n", demuxer->fFormatContext->streams[demuxer->videoStream]->codec->width, demuxer->fFormatContext->streams[demuxer->videoStream]->codec->height);
-		omxErr = omxSetFrameSize(demuxer->videoDecoder, demuxer->fFormatContext->streams[demuxer->videoStream]->codec->width, demuxer->fFormatContext->streams[demuxer->videoStream]->codec->height);
+		logInfo(LOG_DEMUXER, "This video stream has a framesize of %dx%d.\n", demuxer->formatContext->streams[demuxer->videoStream]->codec->width, demuxer->formatContext->streams[demuxer->videoStream]->codec->height);
+		omxErr = omxVideoSetFrameSize(demuxer->videoDecoder, demuxer->formatContext->streams[demuxer->videoStream]->codec->width, demuxer->formatContext->streams[demuxer->videoStream]->codec->height);
 		if (omxErr != OMX_ErrorNone)
 		{
 			logInfo(LOG_DEMUXER, "video decoder omxSetFrameSize. (Error=0x%08x).\n", omxErr);
 			return omxErr;
 		}
 
-		omxErr = omxStartWithValidFrame(demuxer->videoDecoder, 0);
+		omxErr = omxVideoStartWithValidFrame(demuxer->videoDecoder, 0);
 		if (omxErr != OMX_ErrorNone)
 		{
 			logInfo(LOG_DEMUXER, "video decoder omxStartWithValidFrame. (Error=0x%08x).\n", omxErr);
@@ -939,15 +981,15 @@ OMX_ERRORTYPE demuxerInitOMXAudio(struct DEMUXER_T *demuxer)
 
 		if (demuxer->swDecodeAudio == 0) {
 			logInfo(LOG_DEMUXER, "This audio stream has codec_id=%d, sample_rate=%d, bits_per_coded_sample=%d, channels=%d, passthrough=%d.\n", 
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->codec_id, 
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->sample_rate, 
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->channels,
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->codec_id, 
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->sample_rate, 
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->channels,
 					demuxer->audioPassthrough);
-			omxErr = omxSetAudioCompressionFormatAndBuffer(demuxer->audioDecoder, demuxer->fFormatContext->streams[demuxer->audioStream]->codec->codec_id, 
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->sample_rate, 
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
-					demuxer->fFormatContext->streams[demuxer->audioStream]->codec->channels,
+			omxErr = omxSetAudioCompressionFormatAndBuffer(demuxer->audioDecoder, demuxer->formatContext->streams[demuxer->audioStream]->codec->codec_id, 
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->sample_rate, 
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->bits_per_coded_sample,
+					demuxer->formatContext->streams[demuxer->audioStream]->codec->channels,
 					demuxer->audioPassthrough);
 			if (omxErr != OMX_ErrorNone)
 			{
@@ -977,8 +1019,8 @@ OMX_ERRORTYPE demuxerInitOMXAudio(struct DEMUXER_T *demuxer)
 			}
 
 			if ((demuxer->audioDecoder->useHWDecode == 1) && (demuxer->audioPassthrough == 0)) {
-				omxErr = omxSetAudioExtraData(demuxer->audioDecoder, demuxer->fFormatContext->streams[demuxer->audioStream]->codec->extradata, 
-						demuxer->fFormatContext->streams[demuxer->audioStream]->codec->extradata_size);
+				omxErr = omxSetAudioExtraData(demuxer->audioDecoder, demuxer->formatContext->streams[demuxer->audioStream]->codec->extradata, 
+						demuxer->formatContext->streams[demuxer->audioStream]->codec->extradata_size);
 				if (omxErr != OMX_ErrorNone)
 				{
 					logInfo(LOG_DEMUXER, "audio decoder omxSetAudioExtraData. (Error=0x%08x).\n", omxErr);
@@ -1047,10 +1089,6 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 {
 	static AVPacket packet;
 	int doneReading = 0;
-//	uint64_t videoBytesWritten = 0;
-//	uint64_t audioBytesWritten = 0;
-//	FILE *videoFile = NULL;
-//	FILE *audioFile = NULL;
 
 #ifdef PI
 	if (omxInit() != 0) {
@@ -1087,25 +1125,8 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 	demuxer->setAudioStartTime = 1;
 	demuxer->firstFrame = 1;
 
-/*	if (demuxer->videoStream != -1) {
-	//	videoFile = fopen(getStringAtListIndex(mythConnection->currentRecording,10), "w");
-		videoFile = fopen("test.video", "w");
-		if (videoFile == NULL) {
-			logInfo( LOG_DEMUXER," Could not open videoFile for output!\n");
-			goto theEnd;
-		}
-	}
-
-	if (demuxer->audioStream != -1) {
-		audioFile = fopen("test.audio", "w");
-		if (audioFile == NULL) {
-			logInfo( LOG_DEMUXER," Could not open audioFile for output!\n");
-			goto theEnd;
-		}
-	}
-*/
-	struct timespec interval;
-	struct timespec remainingInterval;
+//	struct timespec interval;
+//	struct timespec remainingInterval;
 	int64_t audioPTS = -1;
 	int64_t videoPTS = -1;
 	int64_t audioDTS = -1;
@@ -1152,7 +1173,7 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 			logInfo(LOG_DEMUXER_DEBUG, "Going to read packet.\n");
 
 			// Read new packet
-			if ((demuxerIsStopped(demuxer) == 0) && (av_read_frame(demuxer->fFormatContext, &packet)<0))
+			if ((demuxerIsStopped(demuxer) == 0) && (av_read_frame(demuxer->formatContext, &packet)<0))
 				doneReading = 1;
 
 			logInfo(LOG_DEMUXER_DEBUG, "Read packet.\n");
@@ -1165,21 +1186,11 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 			}
 
 			if ((demuxerIsStopped(demuxer) == 0) && (demuxer->videoStream != -1) && (packet.data != NULL) && (packet.stream_index == demuxer->videoStream)) {
-				// Write packet to file.
-/*				logInfo(LOG_DEMUXER_DEBUG, " ==| 0x");
-				for(i=0;i<5;i++) {
-					logInfo(LOG_DEMUXER_DEBUG, "%02x", packet.data[i]); 
-				}
-				logInfo(LOG_DEMUXER_DEBUG, "\n");*/
-
-				//fwrite(packet.data, packet.size, 1, videoFile);
-				//videoBytesWritten += packet.size;
+				// We used to save to a file in this part
 			}
 			else {
 				if ((demuxerIsStopped(demuxer) == 0) && (demuxer->videoStream != -1) && (packet.data != NULL) && (packet.stream_index == demuxer->audioStream)) {
-					// Write packet to file.
-					//fwrite(packet.data, packet.size, 1, audioFile);
-					//audioBytesWritten += packet.size;
+					// We used to save to a file in this part
 				}
 				else {
 					logInfo(LOG_DEMUXER_DEBUG, "This is a packet we do not want to process. Going to ignore it. packet.stream_index=%d.\n", packet.stream_index);
@@ -1235,7 +1246,7 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 			// We need to drop the first few audio or video packets because the time difference is to big.
 
 			if ((demuxerIsStopped(demuxer) == 0) && (demuxer->videoStream != -1) && (packet.data != NULL) && (packet.stream_index == demuxer->videoStream)) {
-				tmpPTS = ffmpegConvertTimestamp(demuxer, videoPTS, &demuxer->fFormatContext->streams[packet.stream_index]->time_base);
+				tmpPTS = ffmpegConvertTimestamp(demuxer, videoPTS, &demuxer->formatContext->streams[packet.stream_index]->time_base);
 				logInfo(LOG_DEMUXER_DEBUG, "VideoDTS=%" PRId64 ", VideoPTS=%" PRId64 ", demuxer->startPTS=%" PRId64 ", timestamp=%.15f\n", videoDTS, videoPTS, demuxer->startPTS, tmpPTS);
 				if (showVideoPacket(demuxer, &packet, tmpPTS) == 1) {
 					packet.data = NULL;
@@ -1246,7 +1257,7 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 			}
 			else {
 				if ((demuxerIsStopped(demuxer) == 0) && (demuxer->audioStream != -1) && (packet.data != NULL) && (packet.stream_index == demuxer->audioStream)) {
-					tmpPTS = ffmpegConvertTimestamp(demuxer, audioPTS, &demuxer->fFormatContext->streams[packet.stream_index]->time_base);
+					tmpPTS = ffmpegConvertTimestamp(demuxer, audioPTS, &demuxer->formatContext->streams[packet.stream_index]->time_base);
 					logInfo(LOG_DEMUXER_DEBUG, "AudioDTS=%" PRId64 ", AudioPTS=%" PRId64 ", demuxer->startPTS=%" PRId64 ", timestamp=%.15f\n", audioDTS, audioPTS, demuxer->startPTS, tmpPTS);
 					if (decodeAudio(demuxer, &packet, tmpPTS) == 1) {
 //					if (playAudioPacket(demuxer, &packet, tmpPTS) == 1) {
@@ -1269,16 +1280,14 @@ void *demuxerLoop(struct DEMUXER_T *demuxer)
 			packet.data = NULL;
 		}
 
-		interval.tv_sec = 0;
+/*		interval.tv_sec = 0;
 		interval.tv_nsec = 10;
 
-		nanosleep(&interval, &remainingInterval);
+		nanosleep(&interval, &remainingInterval);*/
 	}
 
 	if(packet.data!=NULL) av_free_packet(&packet);
 
-//	if (demuxer->videoStream != -1) fclose(videoFile);
-//	if (demuxer->audioStream != -1) fclose(audioFile);
 
 theEnd:
 	pthread_mutex_lock(&demuxer->threadLock);
@@ -1287,6 +1296,52 @@ theEnd:
 
 	pthread_mutex_unlock(&demuxer->threadLock);
 
+	logInfo(LOG_DEMUXER, "Stopping video tunnels.\n");
+	omxFlushTunnel(demuxer->videoDecoderToSchedulerTunnel);
+	omxFlushTunnel(demuxer->videoDecoderToImageFXTunnel);
+	omxFlushTunnel(demuxer->videoImageFXToSchedulerTunnel);
+	omxFlushTunnel(demuxer->clockToVideoSchedulerTunnel);
+	omxFlushTunnel(demuxer->videoSchedulerToRenderTunnel);
+
+	logInfo(LOG_DEMUXER, "Destroying video tunnels.\n");
+	omxDestroyTunnel(demuxer->clockToVideoSchedulerTunnel);
+	omxDestroyTunnel(demuxer->videoDecoderToSchedulerTunnel);
+	omxDestroyTunnel(demuxer->videoDecoderToImageFXTunnel);
+	omxDestroyTunnel(demuxer->videoImageFXToSchedulerTunnel);
+	omxDestroyTunnel(demuxer->videoSchedulerToRenderTunnel);
+
+	logInfo(LOG_DEMUXER, "Flushing video decoder input port.\n");
+	omxFlushPort(demuxer->videoDecoder, demuxer->videoDecoder->inputPort);
+
+	logInfo(LOG_DEMUXER, "Destroying video components.\n");
+	omxDestroyComponent(demuxer->videoScheduler);
+	omxDestroyComponent(demuxer->videoImageFX);
+	omxDestroyComponent(demuxer->videoDecoder);
+	omxDestroyComponent(demuxer->videoRender);
+
+	logInfo(LOG_DEMUXER, "Stopping audio tunnels.\n");
+	omxFlushTunnel(demuxer->clockToAudioRenderTunnel);
+	omxFlushTunnel(demuxer->audioDecoderToMixerTunnel);
+	omxFlushTunnel(demuxer->audioMixerToRenderTunnel);
+	omxFlushTunnel(demuxer->audioDecoderToRenderTunnel);
+
+	logInfo(LOG_DEMUXER, "Destroying audio tunnels.\n");
+	omxDestroyTunnel(demuxer->audioDecoderToMixerTunnel);
+	omxDestroyTunnel(demuxer->audioMixerToRenderTunnel);
+	omxDestroyTunnel(demuxer->clockToAudioRenderTunnel);
+	omxDestroyTunnel(demuxer->audioDecoderToRenderTunnel);
+
+	logInfo(LOG_DEMUXER, "Flushing audio render input port.\n");
+	omxFlushPort(demuxer->audioRender, demuxer->audioRender->inputPort);
+
+	logInfo(LOG_DEMUXER, "Destroying audio components.\n");
+	omxDestroyComponent(demuxer->audioDecoder);
+	omxDestroyComponent(demuxer->audioMixer);
+	omxDestroyComponent(demuxer->audioRender);
+
+	omxDestroyClock(demuxer->clock);
+	
+	logInfo(LOG_DEMUXER, "Done stopping demuxer loop.\n");
 	return NULL;
 }
 
@@ -1309,7 +1364,38 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	demuxer->nextFile = NULL;
 	demuxer->lastFrameSize = 0;
 	demuxer->deInterlace = 0;
+	demuxer->firstFrame = 0;
+	demuxer->newProgram = 0;
 	
+	demuxer->videoDecoder = NULL;
+	demuxer->videoImageFX = NULL;
+	demuxer->videoRender = NULL;
+	demuxer->videoScheduler = NULL;
+	demuxer->videoDecoderToSchedulerTunnel = NULL;
+	demuxer->videoSchedulerToRenderTunnel = NULL;
+	demuxer->videoDecoderToImageFXTunnel = NULL;
+	demuxer->videoImageFXToSchedulerTunnel = NULL;
+	demuxer->clockToVideoSchedulerTunnel = NULL;
+
+	demuxer->audioDecoder = NULL;
+	demuxer->audioRender = NULL;
+	demuxer->audioMixer = NULL;
+	demuxer->audioDecoderToMixerTunnel = NULL;
+	demuxer->audioMixerToRenderTunnel = NULL;
+	demuxer->clockToAudioRenderTunnel = NULL;
+	demuxer->audioDecoderToRenderTunnel = NULL;
+
+	demuxer->videoCodecContext = NULL;
+	demuxer->audioCodecContext = NULL;
+
+	demuxer->formatContext = NULL;
+
+	demuxer->ioContext = NULL;
+	demuxer->avioBuffer = NULL;
+
+	demuxer->formatContextIsOpen = 0;
+	demuxer->threadStarted = 0;
+
 	if (pthread_mutex_init(&demuxer->threadLock, NULL) != 0)
 	{
 		logInfo( LOG_DEMUXER_DEBUG,"  ----------> could init mutex for thread.\n");
@@ -1319,15 +1405,15 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	}
 	demuxer->demuxerThread = -1;
 
-	unsigned char *buffer = (unsigned char*)av_malloc(FFMPEG_FILE_BUFFER_SIZE);
+	demuxer->avioBuffer = (unsigned char*)av_malloc(FFMPEG_FILE_BUFFER_SIZE);
 
 	// Init io module for input
-	demuxer->ioContext = avio_alloc_context(buffer, FFMPEG_FILE_BUFFER_SIZE, 0, (void *)demuxer, &demuxerReadPacket, 0, &demuxerSeek);
+	demuxer->ioContext = avio_alloc_context(demuxer->avioBuffer, FFMPEG_FILE_BUFFER_SIZE, 0, (void *)demuxer, &demuxerReadPacket, 0, &demuxerSeek);
 
 	if (demuxer->ioContext == NULL) {
 		logInfo( LOG_DEMUXER," - init_put_byte() failed!\n");
 		demuxer_error = DEMUXER_ERROR_CREATE_IOCONTEXT;
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
 
@@ -1338,60 +1424,58 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	demuxer->ioContext->must_flush = 1;
 
 	AVInputFormat *format = NULL;
-	av_probe_input_buffer(demuxer->ioContext, &format, "", NULL, 0, 0);
-
-	if(!format) {
+	if (av_probe_input_buffer(demuxer->ioContext, &format, "", NULL, 0, 0) < -1) {
 		logInfo( LOG_DEMUXER," - av_probe_input_buffer() failed!\n");
 		demuxer_error = DEMUXER_ERROR_PROBE_INPUT_BUFFER;
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
 
 	logInfo( LOG_DEMUXER,"Detected stream Format = %s.\n", format->name); 
 
-	AVFormatContext *fFormatContext = avformat_alloc_context();
-	if (fFormatContext == NULL) {
+	AVFormatContext *formatContext = avformat_alloc_context();
+	if (formatContext == NULL) {
 		logInfo( LOG_DEMUXER," - avformat_alloc_context() failed!\n");
 		demuxer_error = DEMUXER_ERROR_CREATE_FORMAT_CONTEXT;
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
 
-	fFormatContext->pb = demuxer->ioContext;
+	formatContext->pb = demuxer->ioContext;
 
-	fFormatContext->interrupt_callback.callback = &demuxerInterruptCallback;
-	fFormatContext->interrupt_callback.opaque = demuxer;
+	formatContext->interrupt_callback.callback = &demuxerInterruptCallback;
+	formatContext->interrupt_callback.opaque = demuxer;
 
-	if (avformat_open_input(&fFormatContext, "", format, NULL)  <  0) {
+	if (avformat_open_input(&formatContext, "", format, NULL)  <  0) {
 		logInfo( LOG_DEMUXER," - av_open_input_file() failed!\n");
 		demuxer_error = DEMUXER_ERROR_OPEN_INPUT;
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
+
+	demuxer->formatContextIsOpen = 1;
 
 	logInfo( LOG_DEMUXER_DEBUG," - av_open_input_file() success!\n");
 
 	// if format can be nonblocking, let's use that
-//	fFormatContext->flags |= AVFMT_FLAG_NONBLOCK;
+//	formatContext->flags |= AVFMT_FLAG_NONBLOCK;
 
 	// Make sure that when we start the demuxer thread it will start with an empty buffer and not 
 	// first with the part which was used to find the stream info. Otherwise we will get the
 	// part used for finding the stream info double.
-	fFormatContext->flags |= AVFMT_FLAG_NOBUFFER;
+	formatContext->flags |= AVFMT_FLAG_NOBUFFER;
 
 	// Retrieve stream information
-	if (avformat_find_stream_info(fFormatContext, NULL) < 0) {
+	if (avformat_find_stream_info(formatContext, NULL) < 0) {
 		logInfo( LOG_DEMUXER," - av_find_stream_info() failed!\n");
 		demuxer_error = DEMUXER_ERROR_FIND_STREAM_INFO;
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
 
-	//av_free(format);
-
 	if (demuxerStartInterrupted == 1) {
 		logInfo( LOG_DEMUXER," - demuxerStartInterrupted!\n");
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
 
@@ -1399,7 +1483,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	logInfo( LOG_DEMUXER_DEBUG," - av_find_stream_info() success!\n");
 
 	// Dump information about stream onto standard error
-	av_dump_format(fFormatContext, 0, "", 0);
+	av_dump_format(formatContext, 0, "", 0);
 
 	unsigned int i;
 
@@ -1412,14 +1496,14 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	AVDictionaryEntry *streamLang;
 	int languageMatch = 0;
 
-	for(i=0; i<fFormatContext->nb_streams; i++) {
+	for(i=0; i<formatContext->nb_streams; i++) {
 
 		logInfo( LOG_DEMUXER_DEBUG, "Researching info in stream %d.\n", i);
 
 		languageMatch = 0;
-		if (fFormatContext->streams != NULL) {
-			if (fFormatContext->streams[i]->metadata != NULL) {
-				streamLang = av_dict_get(fFormatContext->streams[i]->metadata, "language", NULL, 0);
+		if (formatContext->streams != NULL) {
+			if (formatContext->streams[i]->metadata != NULL) {
+				streamLang = av_dict_get(formatContext->streams[i]->metadata, "language", NULL, 0);
 				if (streamLang) {
 					logInfo( LOG_DEMUXER,"Language of stream is '%s'.\n", streamLang->value);
 					if (language != NULL) {
@@ -1430,29 +1514,29 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 				}
 			}
 			else {
-				logInfo( LOG_DEMUXER_DEBUG, "fFormatContext->streams[%d]->metadata is NULL.\n",i);
+				logInfo( LOG_DEMUXER_DEBUG, "formatContext->streams[%d]->metadata is NULL.\n",i);
 			}
 		}
 		else {
-			logInfo( LOG_DEMUXER_DEBUG, "fFormatContext->streams is NULL.\n");
+			logInfo( LOG_DEMUXER_DEBUG, "formatContext->streams is NULL.\n");
 		}
 
-		if((fFormatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) && (firstVideoStream == -1)) {
+		if((formatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) && (firstVideoStream == -1)) {
 			firstVideoStream = i;
 		}
 
-		if((fFormatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) && (videoStream == -1) && (languageMatch == 1)) {
+		if((formatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO) && (videoStream == -1) && (languageMatch == 1)) {
 			videoStream=i;
-			logInfo( LOG_DEMUXER," Found a videostream on index=%d with stream.id=%d!\n", i, fFormatContext->streams[i]->id);
+			logInfo( LOG_DEMUXER," Found a videostream on index=%d with stream.id=%d!\n", i, formatContext->streams[i]->id);
 		}
 
-		if((fFormatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO) && (firstAudioStream == -1)) {
+		if((formatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO) && (firstAudioStream == -1)) {
 			firstAudioStream = i;
 		}
 
-		if((fFormatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO) && (audioStream == -1) && (languageMatch == 1)) {
+		if((formatContext->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO) && (audioStream == -1) && (languageMatch == 1)) {
 			audioStream=i;
-			logInfo( LOG_DEMUXER," Found a audioStream on index=%d with stream.id=%d!\n", i, fFormatContext->streams[i]->id);
+			logInfo( LOG_DEMUXER," Found a audioStream on index=%d with stream.id=%d!\n", i, formatContext->streams[i]->id);
 		}
 	}
 
@@ -1460,21 +1544,21 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 
 	if ((videoStream == -1) && (firstVideoStream != -1)) {
 		videoStream = firstVideoStream;
-		logInfo( LOG_DEMUXER," Found a videostream on index=%d with stream.id=%d!\n", videoStream, fFormatContext->streams[videoStream]->id);
+		logInfo( LOG_DEMUXER," Found a videostream on index=%d with stream.id=%d!\n", videoStream, formatContext->streams[videoStream]->id);
 	}
 
 	if ((audioStream == -1) && (firstAudioStream != -1)) {
 		audioStream = firstAudioStream;
-		logInfo( LOG_DEMUXER," Found a audioStream on index=%d with stream.id=%d!\n", audioStream, fFormatContext->streams[audioStream]->id);
+		logInfo( LOG_DEMUXER," Found a audioStream on index=%d with stream.id=%d!\n", audioStream, formatContext->streams[audioStream]->id);
 	}
 
 	if(videoStream!=-1) {
 
 		// Determine if we need to deinterlace
-		if (fFormatContext->streams[videoStream]->r_frame_rate.den && fFormatContext->streams[videoStream]->r_frame_rate.num) {
+		if (formatContext->streams[videoStream]->r_frame_rate.den && formatContext->streams[videoStream]->r_frame_rate.num) {
 			// We have enough information to determine if we need to deintelace or not.
-			double realFrameRate = av_q2d(fFormatContext->streams[videoStream]->r_frame_rate);
-			double avgFrameRate = av_q2d(fFormatContext->streams[videoStream]->avg_frame_rate);
+			double realFrameRate = av_q2d(formatContext->streams[videoStream]->r_frame_rate);
+			double avgFrameRate = av_q2d(formatContext->streams[videoStream]->avg_frame_rate);
 			if (realFrameRate != avgFrameRate) {
 				logInfo( LOG_DEMUXER,"We need to deinterlace this stream.\n");
 				demuxer->deInterlace = 1;
@@ -1485,28 +1569,28 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		}
 
 		// Get a pointer to the codec context for the video stream
-		demuxer->videoCodecContext = avcodec_alloc_context3(fFormatContext->streams[videoStream]->codec->codec);
+		demuxer->videoCodecContext = avcodec_alloc_context3(formatContext->streams[videoStream]->codec->codec);
 
 		if (demuxer->videoCodecContext == NULL) {
 			logInfo( LOG_DEMUXER," fVideoCodecContext == NULL!\n");
 			demuxer_error = DEMUXER_ERROR_CREATE_VIDEO_CONTEXT;
-			free(demuxer);
+			demuxerStop(demuxer);
 			return NULL;
 		}
 
 		logInfo( LOG_DEMUXER,"We are going to use videostream %d with codecname '%s', codec_id=%d, width=%d, height=%d, profile=%d, timebase=%.15f.\n", 
-				videoStream, fFormatContext->streams[videoStream]->codec->codec_name, fFormatContext->streams[videoStream]->codec->codec_id,
-				fFormatContext->streams[videoStream]->codec->width, fFormatContext->streams[videoStream]->codec->height, fFormatContext->streams[videoStream]->codec->profile,
-				av_q2d(fFormatContext->streams[videoStream]->time_base));
+				videoStream, formatContext->streams[videoStream]->codec->codec_name, formatContext->streams[videoStream]->codec->codec_id,
+				formatContext->streams[videoStream]->codec->width, formatContext->streams[videoStream]->codec->height, formatContext->streams[videoStream]->codec->profile,
+				av_q2d(formatContext->streams[videoStream]->time_base));
 
 		AVCodec *fVideoCodec;
 
 		// Find the decoder for the video stream
-		fVideoCodec=avcodec_find_decoder(fFormatContext->streams[videoStream]->codec->codec_id);
+		fVideoCodec=avcodec_find_decoder(formatContext->streams[videoStream]->codec->codec_id);
 		if(fVideoCodec == NULL) {
 			logInfo( LOG_DEMUXER," Video Codec not found!\n");
 			demuxer_error = DEMUXER_ERROR_FIND_VIDEO_DECODER;
-			free(demuxer);
+			demuxerStop(demuxer);
 			return NULL;
 		}
 
@@ -1514,7 +1598,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 
 		logInfo( LOG_DEMUXER,"Codec of videostream is '%s'.\n", fVideoCodec->name);
 
-		AVDictionaryEntry *videoLang = av_dict_get(fFormatContext->streams[videoStream]->metadata, "language", NULL, 0);
+		AVDictionaryEntry *videoLang = av_dict_get(formatContext->streams[videoStream]->metadata, "language", NULL, 0);
 		if (videoLang) {
 			logInfo( LOG_DEMUXER,"Language of videostream is '%s'.\n", videoLang->value);
 		}
@@ -1529,7 +1613,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		if(avcodec_open2(demuxer->videoCodecContext, fVideoCodec, &videoDict)<0) {
 			logInfo( LOG_DEMUXER," Could not video open codec!\n");
 			demuxer_error = DEMUXER_ERROR_OPEN_VIDEO_CODEC;
-			free(demuxer);
+			demuxerStop(demuxer);
 			return NULL;
 		}
 	}
@@ -1537,25 +1621,25 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 	if(audioStream!=-1) {
 
 		// Get a pointer to the codec context for the audio stream
-		demuxer->audioCodecContext = avcodec_alloc_context3(fFormatContext->streams[audioStream]->codec->codec);
+		demuxer->audioCodecContext = avcodec_alloc_context3(formatContext->streams[audioStream]->codec->codec);
 
 		if (demuxer->audioCodecContext == NULL) {
 			logInfo( LOG_DEMUXER," demuxer->audioCodecContext == NULL!\n");
 			demuxer_error = DEMUXER_ERROR_CREATE_AUDIO_CONTEXT;
-			free(demuxer);
+			demuxerStop(demuxer);
 			return NULL;
 		}
 
-		logInfo( LOG_DEMUXER_DEBUG,"We are going to use audiostream %d with codecname '%s', codec_id=%d, width=%d, height=%d.\n", audioStream, fFormatContext->streams[audioStream]->codec->codec_name, fFormatContext->streams[audioStream]->codec->codec_id,demuxer->audioCodecContext->width, demuxer->audioCodecContext->height);
+		logInfo( LOG_DEMUXER_DEBUG,"We are going to use audiostream %d with codecname '%s', codec_id=%d, width=%d, height=%d.\n", audioStream, formatContext->streams[audioStream]->codec->codec_name, formatContext->streams[audioStream]->codec->codec_id,demuxer->audioCodecContext->width, demuxer->audioCodecContext->height);
 
 		AVCodec *fAudioCodec;
 
 		// Find the decoder for the video stream
-		fAudioCodec=avcodec_find_decoder(fFormatContext->streams[audioStream]->codec->codec_id);
+		fAudioCodec=avcodec_find_decoder(formatContext->streams[audioStream]->codec->codec_id);
 		if(fAudioCodec == NULL) {
 			logInfo( LOG_DEMUXER," Audio Codec not found!\n");
 			demuxer_error = DEMUXER_ERROR_FIND_AUDIO_DECODER;
-			free(demuxer);
+			demuxerStop(demuxer);
 			return NULL;
 		}
 
@@ -1563,7 +1647,7 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 
 		logInfo( LOG_DEMUXER,"Codec of audiostream is '%s'.\n", fAudioCodec->name);
 
-		AVDictionaryEntry *audioLang = av_dict_get(fFormatContext->streams[audioStream]->metadata, "language", NULL, 0);
+		AVDictionaryEntry *audioLang = av_dict_get(formatContext->streams[audioStream]->metadata, "language", NULL, 0);
 		if (audioLang) {
 			logInfo( LOG_DEMUXER,"Language of audiostream is '%s'.\n", audioLang->value);
 		}
@@ -1578,11 +1662,10 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		if(avcodec_open2(demuxer->audioCodecContext, fAudioCodec, &audioDict)<0) {
 			logInfo( LOG_DEMUXER," Could not audio open codec!\n");
 			demuxer_error = DEMUXER_ERROR_OPEN_AUDIO_CODEC;
-			free(demuxer);
+			demuxerStop(demuxer);
 			return NULL;
 		}
 
-//		demuxer->outfile = fopen("audio.raw", "wb");
 	}
 
 	if (showVideo == 1) {
@@ -1599,17 +1682,18 @@ struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int sho
 		demuxer->audioStream = -1;
 	}
 
-	demuxer->fFormatContext = fFormatContext;
+	demuxer->formatContext = formatContext;
 
 	logInfo( LOG_DEMUXER_DEBUG," *********************> starting demuxer thread.\n");
 	int status = pthread_create( &demuxer->demuxerThread, NULL, &demuxerLoop, demuxer);
 	if (status == 0) {
 		logInfo( LOG_DEMUXER_DEBUG,"  ++++++++++> started thread ok.\n");
+		demuxer->threadStarted = 1;
 	}
 	else {
 		logInfo( LOG_DEMUXER_DEBUG,"  ----------> could not start thread.\n");
 		demuxer_error = DEMUXER_ERROR_START_THREAD;
-		free(demuxer);
+		demuxerStop(demuxer);
 		return NULL;
 	}
 
@@ -1624,23 +1708,60 @@ void demuxerStop(struct DEMUXER_T *demuxer)
 		return;
 	}
 
-	if (demuxerIsStopped(demuxer) == 1) return;
+	if (demuxer->threadStarted == 1) {
 
-	pthread_mutex_lock(&demuxer->threadLock);
+		if (demuxerIsStopped(demuxer) == 1) return;
 
-	demuxer->doStop = 1;
+		pthread_mutex_lock(&demuxer->threadLock);
 
-	pthread_mutex_unlock(&demuxer->threadLock);
+		demuxer->doStop = 1;
 
-	logInfo(LOG_DEMUXER_DEBUG, "Waiting for demuxer thread to stop.\n");
-	pthread_join(demuxer->demuxerThread, NULL);
-	logInfo(LOG_DEMUXER_DEBUG, "Demuxer thread stopped.\n");
+		pthread_mutex_unlock(&demuxer->threadLock);
 
-	av_free(demuxer->ioContext);
+		logInfo(LOG_DEMUXER_DEBUG, "Waiting for demuxer thread to stop.\n");
+		pthread_join(demuxer->demuxerThread, NULL);
+		logInfo(LOG_DEMUXER_DEBUG, "Demuxer thread stopped.\n");
+	}
 
-	avcodec_close(demuxer->videoCodecContext);
-	avcodec_close(demuxer->audioCodecContext);
-	avformat_close_input(&demuxer->fFormatContext);
+	if (demuxer->videoCodecContext != NULL) {
+		logInfo(LOG_DEMUXER, "Releasing memory of demuxer->videoCodecContext.\n");
+		avcodec_close(demuxer->videoCodecContext);
+		av_free(demuxer->videoCodecContext);
+		demuxer->videoCodecContext = NULL;
+	}
+	if (demuxer->audioCodecContext != NULL) {
+		logInfo(LOG_DEMUXER, "Releasing memory of demuxer->audioCodecContext.\n");
+		avcodec_close(demuxer->audioCodecContext);
+		av_free(demuxer->audioCodecContext);
+		demuxer->audioCodecContext = NULL;
+	}
+
+	if (demuxer->formatContext != NULL) {
+		logInfo(LOG_DEMUXER, "Releasing memory of demuxer->formatContext.\n");
+		if (demuxer->formatContextIsOpen == 1) {
+			avformat_close_input(&demuxer->formatContext);
+		}
+		else {
+			avformat_free_context(demuxer->formatContext);
+		}
+		demuxer->formatContext = NULL;
+	}
+
+/*	if (demuxer->avioBuffer != NULL) {
+		logInfo(LOG_DEMUXER, "Releasing memory of demuxer->avioBuffer.\n");
+		av_free(demuxer->avioBuffer);
+		demuxer->avioBuffer = NULL;
+	}
+*/ // Releasing this one gives and error. Is porbably nicely done by the ioContect freeing.
+
+	if (demuxer->ioContext != NULL) {
+		logInfo(LOG_DEMUXER, "Releasing memory of demuxer->ioContext.\n");
+		av_free(demuxer->ioContext);
+		demuxer->ioContext = NULL;
+	}
+
+	logInfo(LOG_DEMUXER, "demuxerStop finished.\n");
+
 }
 
 

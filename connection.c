@@ -149,6 +149,7 @@ struct CONNECTION_T *createConnection(char *inHostname, uint16_t port)
 	result->buffer = NULL;
 	result->bufferPos = 0;
 	result->bufferLen = 0;
+	result->bufferEnd = 0;
 
 	// Create mutexes
 	if (pthread_mutex_init(&result->readWriteLock, NULL) != 0)
@@ -185,15 +186,17 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 
 		logInfo( LOG_CONNECTION_DEBUG,"fillBuffer: Going to allocate memory for the first time.\n");
 
+		connection->bufferLen = 0;
+		connection->bufferPos = 0;
+		connection->bufferEnd = 0;
+
 		connection->buffer = malloc(readLen);
 		if (connection->buffer == NULL) {
-			logInfo( LOG_CONNECTION,"fillBuffer: connection buffer malloc");
+			logInfo( LOG_CONNECTION,"fillBuffer: connection buffer malloc. Tried to allocate %lld bytes.\n", (long long int)readLen);
 			pthread_mutex_unlock(&connection->readWriteLock);
 			return -1;
 		}
 		connection->bufferLen = readLen;
-		connection->bufferPos = 0;
-		connection->bufferEnd = 0;
 	}
 	else {
 		if ((connection->bufferLen - connection->bufferEnd) < responseLength) {
@@ -207,7 +210,7 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 
 			char *newBuffer = malloc(newSize);
 			if (newBuffer == NULL) {
-				logInfo( LOG_CONNECTION,"fillBuffer: newBuffer malloc");
+				logInfo( LOG_CONNECTION,"fillBuffer: newBuffer malloc. Tried to allocate %d bytes.\n", newSize);
 				pthread_mutex_unlock(&connection->readWriteLock);
 				return -1;
 			}
@@ -218,7 +221,7 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 			char *tmpOldBuffer;
 
 			// Need to replace this with a memcpy
-			while (oldBufferPos<connection->bufferEnd) {
+			while (oldBufferPos < connection->bufferEnd) {
 				tmpNewBuffer = newBuffer + newBufferPos;
 				tmpOldBuffer = connection->buffer + oldBufferPos;
 
@@ -261,17 +264,38 @@ unsigned long long int fillConnectionBuffer(struct CONNECTION_T *connection, uns
 	return readLen;
 }
 
+unsigned long long int peekConnectionBuffer(struct CONNECTION_T *connection, char *dstBuffer, int len)
+{
+	unsigned long long int rlen = len;
+
+	pthread_mutex_lock(&connection->readWriteLock);
+
+	unsigned long long int tmpLen = getConnectionDataLen(connection);
+	if (tmpLen < len) {
+		rlen = tmpLen;
+	}
+	char *tmpBuffer = connection->buffer + connection->bufferPos;
+
+	memcpy(dstBuffer, tmpBuffer, rlen);
+
+	pthread_mutex_unlock(&connection->readWriteLock);
+
+	return rlen;
+}
+
 unsigned long long int readConnectionBuffer(struct CONNECTION_T *connection, char *dstBuffer, int len)
 {
 	unsigned long long int rlen = len;
 
 	pthread_mutex_lock(&connection->readWriteLock);
 
+	unsigned long long int tmpLen = getConnectionDataLen(connection);
+	if (tmpLen < len) {
+		rlen = tmpLen;
+	}
+
 	char *tmpBuffer = connection->buffer + connection->bufferPos;
 
-	if (getConnectionDataLen(connection) < len) {
-		rlen = getConnectionDataLen(connection);
-	}
 	memcpy(dstBuffer, tmpBuffer, rlen);
 	connection->bufferPos += rlen;
 
@@ -299,5 +323,7 @@ void destroyConnection(struct CONNECTION_T *connection)
 
 unsigned long long int getConnectionDataLen(struct CONNECTION_T *connection)
 {
-	return (connection->bufferEnd - connection->bufferPos);
+	unsigned long long int result = (connection->bufferEnd - connection->bufferPos);
+
+	return result;
 }

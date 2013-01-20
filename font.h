@@ -27,15 +27,24 @@
  *
  * ***** END MIV LICENSE BLOCK *****/
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include FT_STROKER_H
+
 #ifdef PI
 
-#define OMX_VIDEO_BUFFERS 60
+#include <VG/vgu.h>
 
-OMX_ERRORTYPE omxSetVideoSetExtraBuffers(struct OMX_COMPONENT_T *component);
-OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type);
-OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat,OMX_U32 framerate);
-OMX_ERRORTYPE omxVideoSetFrameSize(struct OMX_COMPONENT_T *component, unsigned int width, unsigned int height);
-OMX_ERRORTYPE omxVideoStartWithValidFrame(struct OMX_COMPONENT_T *component, int startWithValidFrame);
-OMX_ERRORTYPE omxShowVideoInterlace(struct OMX_COMPONENT_T *component);
+struct fontListItem {
+	FT_Face fontFace;
+	FT_UInt	size;
+	VGFont font;
+};
 
 #endif
+
+int initFreeTypeLibrary();
+FT_Face loadFontFace(char *fontFile, int index);
+int createFont(FT_Face fontFace, FT_UInt size);
+struct fontListItem *fontExists(FT_Face fontFace, FT_UInt size);
+

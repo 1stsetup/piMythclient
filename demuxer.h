@@ -65,12 +65,15 @@ typedef enum {
 struct DEMUXER_T{
 	int videoStream;
 	int audioStream;
-	AVFormatContext *fFormatContext;
+	AVFormatContext *formatContext;
+	int formatContextIsOpen;
 	struct MYTH_CONNECTION_T *mythConnection;
 	pthread_t demuxerThread;
+	int threadStarted;
 	int doStop;
 	pthread_mutex_t threadLock;
 
+	unsigned char *avioBuffer;
 	AVIOContext *ioContext;
 	AVCodec *videoCodec;
 	AVCodec *audioCodec;
@@ -122,6 +125,7 @@ struct DEMUXER_T{
 	int64_t startDTS;
 
 	int lastFrameSize;
+	int newProgram;
 };
 
 int demuxer_error;

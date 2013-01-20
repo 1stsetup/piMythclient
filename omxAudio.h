@@ -29,13 +29,16 @@
 
 #ifdef PI
 
-#define OMX_VIDEO_BUFFERS 60
+#define OMX_AUDIO_BUFFERS 10
 
-OMX_ERRORTYPE omxSetVideoSetExtraBuffers(struct OMX_COMPONENT_T *component);
-OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type);
-OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat,OMX_U32 framerate);
-OMX_ERRORTYPE omxVideoSetFrameSize(struct OMX_COMPONENT_T *component, unsigned int width, unsigned int height);
-OMX_ERRORTYPE omxVideoStartWithValidFrame(struct OMX_COMPONENT_T *component, int startWithValidFrame);
-OMX_ERRORTYPE omxShowVideoInterlace(struct OMX_COMPONENT_T *component);
+OMX_ERRORTYPE omxSetAudioCompressionFormatAndBuffer(struct OMX_COMPONENT_T *component, enum AVCodecID codec, 
+				int sample_rate, int bits_per_coded_sample, int channels, int audioPassthrough);
+OMX_ERRORTYPE omxSetAudioExtraData(struct OMX_COMPONENT_T *component, uint8_t *extraData, int extraSize);
+OMX_ERRORTYPE omxSetAudioVolume(struct OMX_COMPONENT_T *component, long volume);
+OMX_ERRORTYPE omxSetAudioDestination(struct OMX_COMPONENT_T *component, const char *device);
+OMX_ERRORTYPE omxSetAudioClockAsSourceReference(struct OMX_COMPONENT_T *component, int clockReferenceSource);
+OMX_ERRORTYPE omxSetAudioPassthrough(struct OMX_COMPONENT_T *component, int passthrough);
+OMX_ERRORTYPE omxShowAudioPortFormat(struct OMX_COMPONENT_T *component, unsigned int port);
+OMX_ERRORTYPE omxSetAudioRenderInput(struct OMX_COMPONENT_T *component, int sample_rate, int bits_per_coded_sample, int channels);
 
 #endif

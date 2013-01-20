@@ -76,19 +76,88 @@ ssize_t sendCommand(struct CONNECTION_T *connection, char *inCommand)
 	return sendLen;
 }
 
-ssize_t readResponse(struct CONNECTION_T *connection, char *outResponse, size_t responseLength)
+int mythDataAvailableOnConnection(struct CONNECTION_T *connection)
+{
+	return (getConnectionDataLen(connection) > 0) ? 1 : 0;
+}
+
+ssize_t readResponse(struct CONNECTION_T *connection, char *outResponse, size_t responseLength, int doWait)
 {
 	logInfo( LOG_MYTHPROTOCOL_DEBUG,"readResponse: responseLength=%zd.\n", responseLength);
 
-	if (fillConnectionBuffer(connection, responseLength, 0) == -1) {
+	int doFill = 1;
+
+	char *rlenStr = malloc(8);
+	memset(rlenStr, 0, 8);
+
+	if (peekConnectionBuffer(connection, rlenStr, 8) == 8) {
+
+		int rlen = 0;
+		int i = 0;
+		char *tmpBuffer = rlenStr;
+
+		while ((i < 8) && (*tmpBuffer != 0x20)) {
+			if (rlen != 0) {
+				rlen = rlen * 10;
+			}
+			rlen = rlen + (*tmpBuffer - 0x30);
+			i++;
+			tmpBuffer++;
+
+			logInfo( LOG_MYTHPROTOCOL_DEBUG,"readResponse: 1. *tmpBuffer=%x.\n", *tmpBuffer);
+		}
+		if ((rlen + 8) > getConnectionDataLen(connection)) {
+			doFill = 0;
+		}
+	}
+
+	free(rlenStr);
+
+	unsigned long long int bytesFilled = 0;
+	if (doFill == 1) {
+		// First we are going check if data is waiting on the socket.
+		// If so read it. Else return.
+		int rc = 1;
+		if (doWait == 0) {
+			struct timeval timeout;
+			fd_set working_fd_set;
+
+			FD_ZERO(&working_fd_set);
+			FD_SET(connection->socket, &working_fd_set);
+
+			timeout.tv_sec  = 0;
+			timeout.tv_usec = 1;
+
+			rc = select(connection->socket+1, &working_fd_set, NULL, NULL, &timeout);
+		}
+
+		if (rc < 0) {
+			return -1; // Interupt signal
+		}
+
+		if (rc > 0) {
+			size_t stillToRead = responseLength - getConnectionDataLen(connection);
+			bytesFilled = fillConnectionBuffer(connection, stillToRead, 0);
+		}
+		else {
+			bytesFilled = -1;
+		}
+
+	}
+
+	if ((doFill == 1) && (bytesFilled == -1)) {
 		return -1;
 	}
 
 //	logInfo( LOG_MYTHPROTOCOL_DEBUG,"readResponse: connection.buffer=%s.\n", connection->buffer);
 //	logInfo( LOG_MYTHPROTOCOL_DEBUG,"readResponse: Connection details. bufferEnd=%d, bufferPos=%d, bufferLen=%d.\n", connection->bufferEnd, connection->bufferPos, connection->bufferLen);
 
+	if (getConnectionDataLen(connection) < 8) {
+		return -1;
+	}
+
 	// Get length of response. It is in the first 8 bytes.
-	char *rlenStr = malloc(8);
+	rlenStr = malloc(8);
 	memset(rlenStr, 0, 8);
 	readConnectionBuffer(connection, rlenStr, 8);
 
@@ -145,13 +214,13 @@ int sendCommandAndReadReply(struct MYTH_CONNECTION_T *mythConnection, char *inCo
 	pthread_mutex_lock(&mythConnection->readWriteLock);
 
 	if (sendCommand(mythConnection->connection, inCommand) == -1) {
-		logInfo(LOG_MYTHPROTOCOL, "sendCommandAndReadReply: sendCommand");
+		logInfo(LOG_MYTHPROTOCOL, "sendCommandAndReadReply: sendCommand.\n");
 		pthread_mutex_unlock(&mythConnection->readWriteLock);
 		return -1;
 	}
 
-        if (readResponse(mythConnection->connection, outResponse, responseLength) == -1) {
-                logInfo(LOG_MYTHPROTOCOL, "sendCommandAndReadReply: readResponse");
+        if (readResponse(mythConnection->connection, outResponse, responseLength, 1) == -1) {
+                logInfo(LOG_MYTHPROTOCOL, "sendCommandAndReadReply: readResponse.\n");
 		pthread_mutex_unlock(&mythConnection->readWriteLock);
                 return -2;
         }
@@ -851,6 +920,33 @@ struct MYTH_CONNECTION_T *startLiveTV(struct MYTH_CONNECTION_T *masterConnection
 		}
 	}*/
 
+}
+
+int mythGetRecordingDetails(struct MYTH_CONNECTION_T *mythConnection, char *recordingFilename)
+{
+	char	response[RESPONSESIZE];
+	char 	command[MAX_COMMAND_LENGTH];
+	int error = 0;
+	struct LISTITEM_T *tmpList;
+
+	snprintf(&command[0], MAX_COMMAND_LENGTH, "QUERY_RECORDING BASENAME %s", recordingFilename);
+	error = sendCommandAndReadReply(mythConnection->masterConnection, &command[0], &response[0], RESPONSESIZE);
+	if (error >= 0) {
+		if (checkResponse(&response[0], "OK[]:[]") != 1) {
+			logInfo( LOG_MYTHPROTOCOL,"could not get details for file %s.\n",recordingFilename);
+			return -1;
+		}
+	}
+
+	if (error >=0) {
+		tmpList = convertStrToList(&response[0], "[]:[]");
+
+		mythConnection->currentRecording = tmpList->next;
+
+		freeListItem(tmpList);
+	}
+
+	return error;
 }
 
 struct MYTH_CONNECTION_T *checkRecorderProgram(struct MYTH_CONNECTION_T *masterConnection, char *recordingFilename)

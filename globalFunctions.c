@@ -70,6 +70,8 @@ void setLogLevelByStr(char *level)
 		if (strcmp(item->string, "client-debug") == 0) logLevel |= LOG_CLIENT_DEBUG | LOG_CLIENT;
 		if (strcmp(item->string, "omx") == 0) logLevel |= LOG_OMX;
 		if (strcmp(item->string, "omx-debug") == 0) logLevel |= LOG_OMX_DEBUG | LOG_OMX;
+		if (strcmp(item->string, "freetype") == 0) logLevel |= LOG_FREETYPE;
+		if (strcmp(item->string, "freetype-debug") == 0) logLevel |= LOG_FREETYPE_DEBUG | LOG_FREETYPE;
 		if (strcmp(item->string, "all") == 0) logLevel |= LOG_ALL;
 		if (strcmp(item->string, "none") == 0) logLevel = 0;
 		item = item->next;

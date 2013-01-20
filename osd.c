@@ -33,6 +33,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "globalFunctions.h"
 #include "lists.h"
@@ -53,7 +54,39 @@
 
 VGfloat currentColor;
 
-static void showEGLErrorStr(EGLint egl_error, char *userStr)
+#define showEGLErrorStr(egl_error, userStr) \
+{ \
+		if (egl_error == EGL_BAD_DISPLAY) logInfo(LOG_OSD, "%s: EGL_BAD_DISPLAY\n", userStr); \
+		if (egl_error == EGL_NOT_INITIALIZED) logInfo(LOG_OSD, "%s: EGL_NOT_INITIALIZED\n", userStr); \
+		if (egl_error == EGL_BAD_CONFIG) logInfo(LOG_OSD, "%s: EGL_BAD_CONFIG\n", userStr); \
+		if (egl_error == EGL_BAD_NATIVE_WINDOW) logInfo(LOG_OSD, "%s: EGL_BAD_NATIVE_WINDOW\n", userStr); \
+		if (egl_error == EGL_BAD_ATTRIBUTE) logInfo(LOG_OSD, "%s: EGL_BAD_ATTRIBUTE\n", userStr); \
+		if (egl_error == EGL_BAD_ALLOC) logInfo(LOG_OSD, "%s: EGL_BAD_ALLOC\n", userStr); \
+		if (egl_error == EGL_BAD_MATCH) logInfo(LOG_OSD, "%s: EGL_BAD_MATCH\n", userStr); \
+		if (egl_error == EGL_BAD_SURFACE) logInfo(LOG_OSD, " %s: EGL_BAD_SURFACE\n", userStr); \
+		if (egl_error == EGL_CONTEXT_LOST) logInfo(LOG_OSD, "%s: EGL_CONTEXT_LOST\n", userStr); \
+		if (egl_error == EGL_BAD_CONTEXT) logInfo(LOG_OSD, "%s: EGL_BAD_CONTEXT\n", userStr); \
+		if (egl_error == EGL_BAD_ACCESS) logInfo(LOG_OSD, "%s: EGL_BAD_ACCESS\n", userStr); \
+		if (egl_error == EGL_BAD_NATIVE_PIXMAP) logInfo(LOG_OSD, "%s: EGL_BAD_NATIVE_PIXMAP\n", userStr); \
+		if (egl_error == EGL_BAD_CURRENT_SURFACE) logInfo(LOG_OSD, "%s: EGL_BAD_CURRENT_SURFACE\n", userStr); \
+		if (egl_error == EGL_BAD_PARAMETER) logInfo(LOG_OSD, "%s: EGL_BAD_PARAMETER\n", userStr); \
+		logInfo(LOG_OSD, "%s: 0x%x\n", userStr, egl_error); \
+}
+
+#define showVGErrorStr(vg_error, userStr) \
+{ \
+		if (vg_error == VG_BAD_HANDLE_ERROR) logInfo(LOG_OSD, "%s: VG_BAD_HANDLE_ERROR\n", userStr); \
+		if (vg_error == VG_ILLEGAL_ARGUMENT_ERROR) logInfo(LOG_OSD, "%s: VG_ILLEGAL_ARGUMENT_ERROR\n", userStr); \
+		if (vg_error == VG_OUT_OF_MEMORY_ERROR) logInfo(LOG_OSD, "%s: VG_OUT_OF_MEMORY_ERROR\n", userStr); \
+		if (vg_error == VG_PATH_CAPABILITY_ERROR) logInfo(LOG_OSD, "%s: VG_PATH_CAPABILITY_ERROR\n", userStr); \
+		if (vg_error == VG_UNSUPPORTED_IMAGE_FORMAT_ERROR) logInfo(LOG_OSD, "%s: VG_UNSUPPORTED_IMAGE_FORMAT_ERROR\n", userStr); \
+		if (vg_error == VG_UNSUPPORTED_PATH_FORMAT_ERROR) logInfo(LOG_OSD, "%s: VG_UNSUPPORTED_PATH_FORMAT_ERROR\n", userStr); \
+		if (vg_error == VG_IMAGE_IN_USE_ERROR) logInfo(LOG_OSD, "%s: VG_IMAGE_IN_USE_ERROR\n", userStr); \
+		if (vg_error == VG_NO_CONTEXT_ERROR) logInfo(LOG_OSD, " %s: VG_NO_CONTEXT_ERROR\n", userStr); \
+		logInfo(LOG_OSD, "%s: 0x%x\n", userStr, vg_error); \
+}
+
+/*static void showEGLErrorStr(EGLint egl_error, char *userStr)
 {
 		if (egl_error == EGL_NO_SURFACE) logInfo(LOG_OSD, "%s: EGL_NO_SURFACE\n", userStr);
 		if (egl_error == EGL_BAD_DISPLAY) logInfo(LOG_OSD, "%s: EGL_BAD_DISPLAY\n", userStr);
@@ -87,6 +120,7 @@ static void showVGErrorStr(VGErrorCode vg_error, char *userStr)
 
 		logInfo(LOG_OSD, "%s: 0x%x\n", userStr, vg_error);
 }
+*/
 
 static int graphicsEGLAttribColours(EGLint *attribs)
 {
@@ -102,7 +136,12 @@ static int graphicsEGLAttribColours(EGLint *attribs)
    return n;
 }
 
-struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour)
+EGLBoolean makeCurrent(struct OSD_T *osd)
+{
+	return eglMakeCurrent(osd->eglDisplay, osd->finalSurface, osd->finalSurface, osd->context);
+}
+
+struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour, void (*doPaint)(struct OSD_T *osd))
 {
 	logInfo(LOG_OSD, "osdCreate start.\n");
 
@@ -110,6 +149,8 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 	result->visible = 0;
 	result->layer = layer;
 	result->fill_colour = fill_colour;
+	result->doPaint = doPaint;
+	result->useStatic = 1;
 
 	uint32_t screen_width, screen_height;
 
@@ -231,11 +272,11 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 	nativewindow.width = result->width;
 	nativewindow.height = result->height;
 
-	result->surface = eglCreateWindowSurface(result->eglDisplay, config[0], &nativewindow, NULL);
-	if (!result->surface)
+	result->finalSurface = eglCreateWindowSurface(result->eglDisplay, config[0], &nativewindow, NULL);
+	if (!result->finalSurface)
 	{
 		EGLint egl_error = eglGetError();
-		showEGLErrorStr(egl_error, "Could not create window surface");
+		showEGLErrorStr(egl_error, "Could not create finalSurface");
 		return NULL;
 	}
 
@@ -247,7 +288,7 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 		return NULL;
 	}
 
-	egl_ret = eglMakeCurrent(result->eglDisplay, result->surface, result->surface, result->context);
+	egl_ret = makeCurrent(result);
 	if (egl_ret != EGL_TRUE) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "eglMakeCurrent");
@@ -264,8 +305,15 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 		return NULL;
 	}
 
-	result->paint = vgCreatePaint();
-	if (!result->paint) {
+	result->fillPaint = vgCreatePaint();
+	if (!result->fillPaint) {
+		EGLint egl_error = eglGetError();
+		showEGLErrorStr(egl_error, "vgCreatePaint");
+		return NULL;
+	}
+
+	result->strokePaint = vgCreatePaint();
+	if (!result->strokePaint) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "vgCreatePaint");
 		return NULL;
@@ -295,7 +343,7 @@ void osdDestroy(struct OSD_T *osd)
 
 		osd->eglDisplay = EGL_NO_DISPLAY;
 		osd->context = EGL_NO_CONTEXT;
-		osd->surface = EGL_NO_SURFACE;
+		osd->finalSurface = EGL_NO_SURFACE;
 	}
 
 	// destroy winow.
@@ -317,7 +365,8 @@ void osdDestroy(struct OSD_T *osd)
 
 	if (osd) {
 		vgDestroyPath(osd->path);
-		vgDestroyPaint(osd->paint);
+		vgDestroyPaint(osd->fillPaint);
+		vgDestroyPaint(osd->strokePaint);
 		free(osd);
 	}
 	logInfo(LOG_OSD, "osdDestroy end.\n");
@@ -338,36 +387,66 @@ void osdSetColor(uint32_t color)
 	graphicsColourToPaint(color, &currentColor); 
 }
 
-void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t fill_colour)
+void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t border_colour, uint32_t fill_colour, int doFill)
 {
-	EGLBoolean egl_ret = eglMakeCurrent(osd->eglDisplay, osd->surface, osd->surface, osd->context);
+	EGLBoolean egl_ret = makeCurrent(osd);
 	if (egl_ret != EGL_TRUE) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "eglMakeCurrent");
 		return;
 	}
 
-	VGfloat rectColour[4];
-
-	graphicsColourToPaint(fill_colour, rectColour);
+	VGfloat rectColour[4], fillColour[4];
+	vgClearPath(osd->path, VG_PATH_CAPABILITY_ALL);
 
 	vgSeti(VG_SCISSORING, VG_FALSE);
 
-	vgSetfv(VG_CLEAR_COLOR, 4, rectColour);
+	graphicsColourToPaint(fill_colour, fillColour);
 
-	vgSetParameteri(osd->paint, VG_PAINT_TYPE, VG_PAINT_TYPE_COLOR);
-	vgSetParameterfv(osd->paint, VG_PAINT_COLOR, 4, rectColour);
+	vgSetfv(VG_CLEAR_COLOR, 4, fillColour);
+
+	vgSetParameteri(osd->fillPaint, VG_PAINT_TYPE, VG_PAINT_TYPE_COLOR);
+	vgSetParameterfv(osd->fillPaint, VG_PAINT_COLOR, 4, fillColour);
+
+	graphicsColourToPaint(border_colour, rectColour);
+
+	vgSetParameteri(osd->strokePaint, VG_PAINT_TYPE, VG_PAINT_TYPE_COLOR);
+	vgSetParameterfv(osd->strokePaint, VG_PAINT_COLOR, 4, rectColour);
+
+	vgSetf(VG_STROKE_LINE_WIDTH, 2.5f);
 
 	VGErrorCode vg_error = vguRect(osd->path, xpos, ypos, width, height);
 	if (vg_error) {
 		showVGErrorStr(vg_error, "vguRect");
+		return;
+	}
+
+	vgSetPaint(osd->fillPaint, VG_FILL_PATH);
+	vg_error = vgGetError();
+	if (vg_error) {
+		showVGErrorStr(vg_error, "vgSetPaint fill");
+		return;
+	}
+
+	vgSetPaint(osd->strokePaint, VG_STROKE_PATH);
+	vg_error = vgGetError();
+	if (vg_error) {
+		showVGErrorStr(vg_error, "vgSetPaint stroke");
+		return;
+	}
+
+	vgDrawPath(osd->path, (doFill == 1) ? VG_STROKE_PATH | VG_FILL_PATH : VG_STROKE_PATH);
+	vg_error = vgGetError();
+	if (vg_error) {
+		showVGErrorStr(vg_error, "vgDrawPath");
+		return;
 	}
 	
 }
 
 void osdClear(struct OSD_T *osd)
 {
-	EGLBoolean egl_ret = eglMakeCurrent(osd->eglDisplay, osd->surface, osd->surface, osd->context);
+	EGLBoolean egl_ret = makeCurrent(osd);
 	if (egl_ret != EGL_TRUE) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "eglMakeCurrent");
@@ -384,56 +463,26 @@ void osdClear(struct OSD_T *osd)
 	vgClear(0, 0, osd->width, osd->width);
 }
 
-void osdDraw(struct OSD_T *osd)
+void osdPaint(struct OSD_T *osd)
 {
 	if (osd == NULL) return;
 
 	EGLBoolean egl_ret;
-	egl_ret = eglMakeCurrent(osd->eglDisplay, osd->surface, osd->surface, osd->context);
+	egl_ret = makeCurrent(osd);
 	if (egl_ret != EGL_TRUE) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "eglMakeCurrent");
 		return;
 	}
 
-//	osd->vc_dispmanx_update = vc_dispmanx_update_start(10);
-/*	if (osd->vc_dispmanx_update)
-	{
-		vc_dispmanx_element_remove(osd->vc_dispmanx_update, osd->dispman_element);
-		vc_dispmanx_update_submit_sync(osd->vc_dispmanx_update);
-		osd->dispman_element = 0;
-	}*/
-
 	osdClear(osd);
 
-	VGErrorCode vg_error;
-
-	vgSetPaint(osd->paint, VG_FILL_PATH);
-	vg_error = vgGetError();
-	if (vg_error) {
-		showVGErrorStr(vg_error, "vgSetPaint");
-	}
-
-	vgDrawPath(osd->path, VG_FILL_PATH);
-	vg_error = vgGetError();
-	if (vg_error) {
-		showVGErrorStr(vg_error, "vgDrawPath");
-	}
-
-/*	if ((osd->visible == 1) && ((xpos != osd->xpos) || (ypos != osd->ypos))) {
-		osdHide(osd);
-	}
-
-	osd->xpos = xpos;
-	osd->ypos = ypos;
-
-	graphics_display_resource(osd->img, 0, osd->layer, xpos, ypos, GRAPHICS_RESOURCE_WIDTH, GRAPHICS_RESOURCE_HEIGHT, VC_DISPMAN_ROT0, 1);*/
-	osd->visible = 1;
+	osd->doPaint(osd);
 
 	vgFinish();
 	logInfo(LOG_OSD, "vgFinish.\n");
 
-	egl_ret = eglSwapBuffers(osd->eglDisplay, osd->surface);
+	egl_ret = eglSwapBuffers(osd->eglDisplay, osd->finalSurface);
 	if (egl_ret != EGL_TRUE) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "eglSwapBuffers");
@@ -443,40 +492,158 @@ void osdDraw(struct OSD_T *osd)
 
 }
 
+void osdShow(struct OSD_T *osd)
+{
+	if ((osd == NULL) || (osd->visible == 1)) return;
+
+	osdPaint(osd);
+	osd->visible = 1;
+}
+
+// Timeout in microseconds
+void osdShowWithTimeoutMicroseconds(struct OSD_T *osd, uint64_t timeout)
+{
+	osd->timeout = timeout;
+	osd->startTime = nowInMicroseconds();
+	osdShow(osd);
+}
+
+// Timeout in Seconds
+void osdShowWithTimeoutSeconds(struct OSD_T *osd, uint64_t timeout)
+{
+	osd->timeout = timeout * 1000000;
+	osd->startTime = nowInMicroseconds();
+	osdShow(osd);
+}
+
 void osdHide(struct OSD_T *osd)
 {
 	if ((osd == NULL) || (osd->visible == 0)) return;
+
+	EGLBoolean egl_ret;
+
+	egl_ret = makeCurrent(osd);
+	if (egl_ret != EGL_TRUE) {
+		EGLint egl_error = eglGetError();
+		showEGLErrorStr(egl_error, "eglMakeCurrent");
+		return;
+	}
+
+	VGfloat vg_clear_colour[4];
+
+	graphicsColourToPaint(GRAPHICS_RGBA32(0,0,0,0x00), vg_clear_colour);
+
+	vgSeti(VG_SCISSORING, VG_FALSE);
+
+	vgSetfv(VG_CLEAR_COLOR, 4, vg_clear_colour);
+	vgClear(0, 0, osd->width, osd->width);
+
+	vgFinish();
+	logInfo(LOG_OSD, "vgFinish.\n");
+
+	egl_ret = eglSwapBuffers(osd->eglDisplay, osd->finalSurface);
+	if (egl_ret != EGL_TRUE) {
+		EGLint egl_error = eglGetError();
+		showEGLErrorStr(egl_error, "eglSwapBuffers");
+		return;
+	}
+	logInfo(LOG_OSD, "eglSwapBuffers.\n");
 
 	//graphics_display_resource(osd->img, 0, osd->layer, osd->xpos, osd->ypos, GRAPHICS_RESOURCE_WIDTH, GRAPHICS_RESOURCE_HEIGHT, VC_DISPMAN_ROT0, 0);
 	osd->visible = 0;
 }
 
-int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size)
+int osdSetFont(struct OSD_T *osd, char *fontFile)
 {
-/*	if (osd == NULL) return -1;
-	uint32_t text_length = strlen(text);
-	//uint32_t width=0, height=0;
-	int32_t s=0;
-	//int len = 0; // length of pre-subtitle
-	//uint32_t img_w, img_h;
+	osd->fontFace = loadFontFace(fontFile, 0);
 
-//	graphics_get_resource_size(img, &img_w, &img_h);
+	if (osd->fontFace == NULL) {
+		return -1;
+	}
 
-//	s = graphics_resource_text_dimensions_ext(img, text, text_length, &width, &height, text_size);
-//	if (s != 0) return -1;
-
-	s = graphics_resource_render_text_ext(osd->img, xpos, ypos,
-		                     GRAPHICS_RESOURCE_WIDTH,
-		                     GRAPHICS_RESOURCE_HEIGHT,
-		                     GRAPHICS_RGBA32(0xff,0xff,0xff,0xff), 
-		                     GRAPHICS_RGBA32(0,0,0,0x80), 
-		                     text, text_length, text_size);
-	if (s != 0) return -1;
-	
-	if (osd->visible == 1) {
-		graphics_update_displayed_resource(osd->img, osd->xpos, osd->ypos, osd->width, osd->height);
+/*	if (createFont(osd->fontFace, 11) != 0) {
+		return -1;
 	}
 */
+	return 0;
+}
+
+int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size, uint32_t border_colour, uint32_t fill_colour, int doFill)
+{
+	EGLBoolean egl_ret = makeCurrent(osd);
+	if (egl_ret != EGL_TRUE) {
+		EGLint egl_error = eglGetError();
+		showEGLErrorStr(egl_error, "eglMakeCurrent");
+		return -1;
+	}
+
+	VGfloat textColour[4], fillColour[4];
+	vgClearPath(osd->path, VG_PATH_CAPABILITY_ALL);
+
+	vgSeti(VG_SCISSORING, VG_FALSE);
+
+	graphicsColourToPaint(fill_colour, fillColour);
+
+	vgSetfv(VG_CLEAR_COLOR, 4, fillColour);
+
+	vgSetParameteri(osd->fillPaint, VG_PAINT_TYPE, VG_PAINT_TYPE_COLOR);
+	vgSetParameterfv(osd->fillPaint, VG_PAINT_COLOR, 4, fillColour);
+
+	graphicsColourToPaint(border_colour, textColour);
+
+	vgSetParameteri(osd->strokePaint, VG_PAINT_TYPE, VG_PAINT_TYPE_COLOR);
+	vgSetParameterfv(osd->strokePaint, VG_PAINT_COLOR, 4, textColour);
+
+	vgSetf(VG_STROKE_LINE_WIDTH, 2.5f);
+
+	vgSetPaint(osd->fillPaint, VG_FILL_PATH);
+	VGErrorCode vg_error = vgGetError();
+	if (vg_error) {
+		showVGErrorStr(vg_error, "vgSetPaint VG_FILL_PATH");
+		return -1;
+	}
+
+	vgSetPaint(osd->strokePaint, VG_STROKE_PATH);
+	vg_error = vgGetError();
+	if (vg_error) {
+		showVGErrorStr(vg_error, "vgSetPaint VG_STROKE_PATH");
+		return -1;
+	}
+
+	VGfloat pos[] = { (VGfloat)xpos, (VGfloat)ypos };
+	vgSetfv(VG_GLYPH_ORIGIN, 2, pos);
+	vg_error = vgGetError();
+	if (vg_error) {
+		showVGErrorStr(vg_error, "vgSetfv VG_GLYPH_ORIGIN");
+		return -1;
+	}
+
+	if (createFont(osd->fontFace, text_size) != 0) {
+		return -1;
+	}
+
+	struct fontListItem *fontItem = fontExists(osd->fontFace, text_size);
+	if (fontItem == NULL) {
+		return -1;
+	}
+
+	int i;
+	char *character = text;
+
+	for (i = 0; i < strlen(text); i++) {
+		logInfo(LOG_OSD, "Going to draw character %s (0x%x).\n", character, character[0]);
+		vgDrawGlyph(fontItem->font, 
+				character[0], (doFill == 1) ? VG_STROKE_PATH | VG_FILL_PATH : VG_STROKE_PATH,
+				VG_FALSE);
+		vg_error = vgGetError();
+		if (vg_error) {
+			showVGErrorStr(vg_error, "vgDrawGlyph");
+			return -1;
+		}
+		character++;
+	}
+
+	
 	return 0;
 
 }
@@ -514,7 +681,7 @@ void osdClear(struct OSD_T *osd)
 {
 }
 
-int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size)
+int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size, uint32_t border_colour, uint32_t fill_colour, int doFill)
 {
 	printf("text=%s,x=%d,y=%d,text_size=%d\n", text, xpos, ypos, text_size);
 
