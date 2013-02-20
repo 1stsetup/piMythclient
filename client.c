@@ -35,6 +35,8 @@
 #include <termios.h>
 #include <signal.h>
 
+#include <interface/vmcs_host/vcgencmd.h>
+
 #include "connection.h"
 #include "globalFunctions.h"
 #include "mythProtocol.h"
@@ -46,7 +48,7 @@
 
 #ifdef PI
 
-#include "vgfont.h"
+//#include "vgfont.h"
 #include "tvservice.h"
 
 #endif
@@ -102,7 +104,7 @@ void changeSTDIN()
 
 //void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t border_colour, uint32_t fill_colour, int doFill)
 
-void doPaint(struct OSD_T *osd)
+void doPaint(struct OSD_T *osd, void *opaque)
 {
 	logInfo( LOG_CLIENT,"1. Here we are.\n");
 
@@ -115,7 +117,7 @@ void doPaint(struct OSD_T *osd)
 
 char *programTitle = NULL;
 
-void doPaintTitle(struct OSD_T *osd)
+void doPaintTitle(struct OSD_T *osd, void *opaque)
 {
 	logInfo( LOG_CLIENT,"1. Here we are.\n");
 
@@ -156,6 +158,7 @@ int main(int argc, char *argv[])
 
 	signal(SIGINT, catchedCtrlC);
 	signal(SIGKILL, catchedKill);
+
 /*
 	-h <hostname>
 	-p <port>
@@ -212,12 +215,12 @@ int main(int argc, char *argv[])
 //	tvserviceHDMIPowerOnBest(0, 1080, 720, 50, 0);
 //	sleep(1);
 
- 	struct OSD_T *osd2 = osdCreate(1, 0, 0, GRAPHICS_RGBA32(255,0,0,0xff), &doPaint);
+/* 	struct OSD_T *osd2 = osdCreate(1, 0, 0, GRAPHICS_RGBA32(255,0,0,0xff), &doPaint);
 	if (osd2 == NULL) {
 		printf("osdCreate osd2 error.\n");
 		exit(1);
 	}
-
+*/
  	struct OSD_T *osdTitle = osdCreate(1, 0, 0, GRAPHICS_RGBA32(0,0,0,0x0), &doPaintTitle);
 	if (osdTitle == NULL) {
 		printf("osdCreate osdTitle error.\n");
@@ -230,7 +233,7 @@ int main(int argc, char *argv[])
 	}
 
 //	osdDrawText(osd2, 200, 200, "DIT IS EEN TEST BERICHT", 50);
-	osdShow(osd2);
+//	osdShow(osd2, NULL);
 
 /*	struct OSD_T *osd1 = osdCreate(2, 500, 500, 0x80);
 	if (osd1 == NULL) {
@@ -251,7 +254,7 @@ int main(int argc, char *argv[])
 
 //	osdDestroy(osd1);
 //	osdDestroy(osd2);
-	osdHide(osd2);
+//	osdHide(osd2);
 
 //	tvserviceDestroy();
 //	bcm_host_deinit();
@@ -322,7 +325,7 @@ int main(int argc, char *argv[])
 	if ((error >=0) && (recordingFilename != NULL)) {
 		error = playRecorderProgram(slaveConnection);
 		if (error >= 0) {
-			demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
+			demuxer = demuxerStart(slaveConnection, showVideo, playAudio, 1, audioPassthrough);
 		}
 	}
 	
@@ -363,7 +366,7 @@ int main(int argc, char *argv[])
 					demuxer->newProgram = 0;
 					programTitle = getStringAtListIndex(slaveConnection->currentRecording, 0);
 					logInfo(LOG_CLIENT, "Programname: %s.\n", getStringAtListIndex(slaveConnection->currentRecording, 0));
-					osdShowWithTimeoutSeconds(osdTitle, 10);
+					osdShowWithTimeoutSeconds(osdTitle, 10, NULL);
 				}
 			}
 
@@ -381,6 +384,10 @@ int main(int argc, char *argv[])
 							if (slaveConnection->recorderId == atoi(getStringAtListIndex(tmpDetails,3))) {  // Check recorderId
 								if (firstStartRecording == 1) {
 
+									if (newFileName != NULL) {
+										free(newFileName);
+										newFileName = NULL;
+									}
 									newFileName = mythConvertToFilename( getStringAtListIndex(tmpDetails,5), getStringAtListIndex(tmpDetails,7));
 
 									if (slaveConnection->streaming == 0) {
@@ -388,7 +395,7 @@ int main(int argc, char *argv[])
 										if (mythGetRecordingDetails(slaveConnection, newFileName) >= 0) {
 											programTitle = getStringAtListIndex(slaveConnection->currentRecording, 0);
 											logInfo(LOG_CLIENT, "Programname: %s.\n", getStringAtListIndex(slaveConnection->currentRecording, 0));
-											osdShowWithTimeoutSeconds(osdTitle, 10);
+											osdShowWithTimeoutSeconds(osdTitle, 10, NULL);
 										}
 
 										logInfo(LOG_CLIENT, "Going to request file=%s.\n", newFileName);
@@ -396,8 +403,8 @@ int main(int argc, char *argv[])
 										slaveConnection->transferConnection = mythPrepareNextProgram(slaveConnection, newFileName); 
 										if (slaveConnection->transferConnection != NULL) {
 											logInfo( LOG_CLIENT," *********************> starting demuxer thread.\n");
-											sleep(5); // We let it sleep for 5 seconds so mythtv can buffer up.
-											demuxer = demuxerStart(slaveConnection, showVideo, playAudio, audioPassthrough);
+											sleep(3); // We let it sleep for 5 seconds so mythtv can buffer up.
+											demuxer = demuxerStart(slaveConnection, showVideo, playAudio, 1, audioPassthrough);
 											if (demuxer == NULL) {
 												logInfo( LOG_CLIENT," *********************> Error starting demuxer thread.\n");
 											}
@@ -410,7 +417,7 @@ int main(int argc, char *argv[])
 										logInfo(LOG_CLIENT, "Change of program on same channel. Will tell demuxer it needs to stream from a new file %s.\n", newFileName);
 										demuxerSetNextFile(demuxer, newFileName);
 									}
-									free(newFileName);
+									//free(newFileName);
 								}
 								else {
 									// We do this because when the first start recording is seen mythtv is still tuning in on the channel. 
@@ -431,6 +438,7 @@ int main(int argc, char *argv[])
 						if ((stdinBuffer >= 48) && (stdinBuffer <= 57)) { // digit keys 0..9
 							newChannel = (newChannel * 10) + (stdinBuffer - 48);
 							logInfo(LOG_CLIENT, "newChannel=%d.\n", newChannel);
+							osdShowWithTimeoutSeconds(osdTitle, 10, NULL);
 						}
 						if ((stdinBuffer == 10) && (recordingFilename == NULL)) {
 							channelChanged = 0;
@@ -471,10 +479,10 @@ int main(int argc, char *argv[])
 								else {
 									currentChannel = newChannel2;
 									logInfo(LOG_CLIENT, "Switched to channel %d\n", newChannel2);
+									logInfo( LOG_CLIENT," slaveConnection ChannelId=%s\n",getStringAtListIndex(slaveConnection->currentRecording,6));
+									logInfo( LOG_CLIENT," slaveConnection StartTime=%s\n", getStringAtListIndex(slaveConnection->currentRecording,25));
 								}
 
-								logInfo( LOG_CLIENT," slaveConnection ChannelId=%s\n",getStringAtListIndex(slaveConnection->currentRecording,6));
-								logInfo( LOG_CLIENT," slaveConnection StartTime=%s\n", getStringAtListIndex(slaveConnection->currentRecording,25));
 								changingChannel = 0;
 							}
 						}

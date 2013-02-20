@@ -27,17 +27,7 @@
  *
  * ***** END MIV LICENSE BLOCK *****/
 
-#ifdef PI
+int licenseH264IsInstalled();
+int licenseMPEG2IsInstalled();
+int licenseVC1IsInstalled();
 
-#define OMX_VIDEO_BUFFERS 60
-
-OMX_ERRORTYPE omxSetVideoSetExtraBuffers(struct OMX_COMPONENT_T *component);
-OMX_ERRORTYPE omxGetVideoInterlace(struct OMX_COMPONENT_T *component, OMX_CONFIG_INTERLACETYPE *videoInterlace);
-OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type);
-OMX_ERRORTYPE omxSetVideoCompressionFormat(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat);
-OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat,OMX_U32 framerate);
-OMX_ERRORTYPE omxVideoSetFrameSize(struct OMX_COMPONENT_T *component, unsigned int width, unsigned int height);
-OMX_ERRORTYPE omxVideoStartWithValidFrame(struct OMX_COMPONENT_T *component, int startWithValidFrame);
-OMX_ERRORTYPE omxShowVideoInterlace(struct OMX_COMPONENT_T *component);
-
-#endif

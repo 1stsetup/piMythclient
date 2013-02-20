@@ -1,6 +1,6 @@
-OBJS=globalFunctions.o lists.o font.o omxCore.o omxVideo.o omxAudio.o demuxer.o connection.o mythProtocol.o osd.o  bcm.o vcos.o tvservice.o client.o
+OBJS=globalFunctions.o lists.o font.o licenseChecks.o omxCore.o omxVideo.o omxAudio.o demuxer.o connection.o mythProtocol.o osd.o  bcm.o vcos.o tvservice.o client.o
 BIN=piMythClient
-LDFLAGS+=-luuid -lavformat -lavcodec -lavutil -lswresample -pthread -lz -lx264 -laacplus -lm -lbz2 -lfreetype -lrt -lbluray
+LDFLAGS+=-luuid -lavformat -lavcodec -lavutil -lswresample -lswscale -pthread -lz -lx264 -laacplus -lm -lbz2 -lfreetype -lrt -lbluray
 CFLAGS+=-Wall -I/usr/include/freetype2
 INCLUDES+=
 
@@ -31,6 +31,9 @@ pi-debug: pi
 
 pi-valgrind: CFLAGS += -g -O0
 pi-valgrind: pi
+
+pi-gdb: CFLAGS += -ggdb -DDEBUG
+pi-gdb: pi
 
 clean:
 	for i in $(OBJS); do (if test -e "$$i"; then ( rm $$i ); fi ); done

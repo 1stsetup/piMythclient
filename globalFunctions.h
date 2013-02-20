@@ -52,11 +52,19 @@
 void setLogLevel(uint32_t level) ;
 uint32_t getLogLevel();
 
+#ifdef DEBUG
+
 #define logInfo( level, fmt, arg... ) \
 	if (getLogLevel() & level) { \
-		printf( "%s:%d " fmt, __func__, __LINE__, ##arg); \
+		printf( "%s:%s:%d " fmt,__FILE__, __func__, __LINE__, ##arg ); \
 		fflush(NULL); \
 	}
+
+#else
+
+#define logInfo( level, fmt, arg... )
+
+#endif
 
 int indexOf(char *text, char *needle);
 char *now(const char *format, int UTC);

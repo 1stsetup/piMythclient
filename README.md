@@ -8,6 +8,7 @@ It only works with myth version 0.26
 Prerequisite: Compiled ffmpeg. Please follow guide on http://ffmpeg.org/trac/ffmpeg/wiki/How%20to%20compile%20FFmpeg%20for%20Raspberry%20Pi%20%28Raspbian%29
 
 To compile on the pi do "make pi"
+To compile on the pi with debug setting do "make pi-gdb"
 
 To run do:
 
@@ -29,5 +30,9 @@ It will currently use hdmi as audio and video output.
 * When it can detect it needs to deInterlace it will do it.
 * Audio is working but it is decoded in software and converted to stereo in software.
 
-Still working on trying to get it decoded in hardware. Probably need extra licenses for this which are not yet available from the Raspberry pi organisation.
+Audio HW decoding is not available. All is done in software. This is a limitation of the PI.
+
+Known problems:
+* There is still some memory leak not yet found.
+* Switching channels fails after a while the video decoder produces an error event.
 

@@ -85,12 +85,17 @@ struct OMX_COMPONENT_T {
 
 	int inputPort;
 	int outputPort;
+	int clockPort;
 
 	pthread_mutex_t   inputMutex;
 	pthread_cond_t    inputBufferCond;
 
 	struct SIMPLELISTITEM_T *inputBuffer;
 	struct SIMPLELISTITEM_T *inputBufferEnd;
+	struct SIMPLELISTITEM_T *inputBufferHdr;
+	struct SIMPLELISTITEM_T *inputBufferHdrEnd;
+	int		hasBuffers;
+	int		changingStateToLoadedFromIdle;
 	unsigned int	inputAlignment;
 	unsigned int	inputBufferSize;
 	unsigned int	inputBufferCount;
@@ -132,8 +137,9 @@ struct OMX_COMPONENT_T *omxCreateComponent(char *componentName, OMX_INDEXTYPE pa
 void omxDestroyComponent(struct OMX_COMPONENT_T *component);
 struct OMX_CLOCK_T *omxCreateClock(int hasVideo, int hasAudio, int hasText, int hdmiSync);
 void omxDestroyClock(struct OMX_CLOCK_T *clock);
+OMX_ERRORTYPE omxGetClockCurrentMediaTime(struct OMX_CLOCK_T *clock, int port, OMX_TICKS *outTimeStamp);
 OMX_STATETYPE omxGetState(struct OMX_COMPONENT_T *component);
-OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STATETYPE state);
+OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STATETYPE state, uint64_t timeout);
 struct OMX_TUNNEL_T *omxCreateTunnel(struct OMX_COMPONENT_T *sourceComponent,unsigned int sourcePort,struct OMX_COMPONENT_T *destComponent,unsigned int destPort);
 void omxDestroyTunnel(struct OMX_TUNNEL_T *tunnel);
 OMX_ERRORTYPE omxEstablishTunnel(struct OMX_TUNNEL_T *tunnel);
@@ -146,7 +152,7 @@ OMX_BUFFERHEADERTYPE *omxGetInputBuffer(struct OMX_COMPONENT_T *component , long
 OMX_ERRORTYPE omxWaitForEvent(struct OMX_COMPONENT_T *component, OMX_EVENTTYPE inEvent, OMX_U32 nData1, uint64_t timeout);
 OMX_ERRORTYPE omxFlushTunnel(struct OMX_TUNNEL_T *tunnel);
 void omxFlushPort(struct OMX_COMPONENT_T *component, unsigned int port);
-void omxChangeStateToLoaded(struct OMX_COMPONENT_T *component);
+void omxChangeStateToLoaded(struct OMX_COMPONENT_T *component, uint8_t freeBuffers);
 void omxShowState(struct OMX_COMPONENT_T *component);
 
 #endif

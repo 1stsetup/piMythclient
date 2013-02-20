@@ -32,6 +32,13 @@
 
 #include "font.h"
 
+#define R_888_MASK      (0x00FF0000)
+#define G_888_MASK      (0x0000FF00)
+#define B_888_MASK      (0x000000FF)
+#define ALPHA_888_MASK  (0xFF000000)
+#define GRAPHICS_RGBA32( r, g, b, a ) GRAPHICS_RGBA888( r, g, b, a )
+#define GRAPHICS_RGBA888( r, g, b, a ) ( (((a) << (8+8+8)) & ALPHA_888_MASK) | (((b) << (8+8)) & R_888_MASK) | (((g) << 8) & G_888_MASK) | ((r) & B_888_MASK) )
+
 #ifdef PI
 
 #include <VG/vgu.h>
@@ -92,25 +99,26 @@ struct OSD_T{
 #endif
 	FT_Face fontFace;
 	int useStatic;
-	void (*doPaint)(struct OSD_T *osd);
+	void (*doPaint)(struct OSD_T *osd, void *opaque);
 	uint64_t timeout;
 	uint64_t startTime;
 };
 
 #ifdef PI
-struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour, void (*doPaint)(struct OSD_T *osd));
+void graphicsColourToPaint(uint32_t col, VGfloat *rgba);
+struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour, void (*doPaint)(struct OSD_T *osd, void *opaque));
 #else
 struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height);
 #endif
 
 void osdDestroy(struct OSD_T *osd);
-void osdPaint(struct OSD_T *osd);
-void osdShow(struct OSD_T *osd);
+void osdPaint(struct OSD_T *osd, void *opaque);
+void osdShow(struct OSD_T *osd, void *opaque);
 void osdHide(struct OSD_T *osd);
 void osdClear(struct OSD_T *osd);
 int osdDrawText(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, char *text, const uint32_t text_size, uint32_t border_colour, uint32_t fill_colour, int doFill);
 void osdSetColor(uint32_t color);
 void osdDrawRect(struct OSD_T *osd, uint32_t xpos, uint32_t ypos, uint32_t width, uint32_t height, uint32_t border_colour, uint32_t fill_colour, int doFill);
 int osdSetFont(struct OSD_T *osd, char *fontFile);
-void osdShowWithTimeoutMicroseconds(struct OSD_T *osd, uint64_t timeout);
-void osdShowWithTimeoutSeconds(struct OSD_T *osd, uint64_t timeout);
+void osdShowWithTimeoutMicroseconds(struct OSD_T *osd, uint64_t timeout, void *opaque);
+void osdShowWithTimeoutSeconds(struct OSD_T *osd, uint64_t timeout, void *opaque);

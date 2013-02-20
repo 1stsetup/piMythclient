@@ -282,12 +282,25 @@ OMX_ERRORTYPE omxEventHandlerCallback(
 	const char *eventStr;
 
 	switch (eEvent) {
-		case OMX_EventCmdComplete: eventStr = "OMX_EventCmdComplete"; break;	
-		case OMX_EventError: eventStr = "OMX_EventError"; break;	
+		case OMX_EventCmdComplete: 
+			switch(nData1) {
+			case OMX_CommandStateSet: eventStr = "OMX_EventCmdComplete: cmd=OMX_CommandStateSet"; break;
+			case OMX_CommandFlush: eventStr = "OMX_EventCmdComplete: cmd=OMX_CommandFlush"; break;
+			case OMX_CommandPortDisable: eventStr = "OMX_EventCmdComplete: cmd=OMX_CommandPortDisable"; break;
+			case OMX_CommandPortEnable: eventStr = "OMX_EventCmdComplete: cmd=OMX_CommandPortEnable"; break;
+			case OMX_CommandMarkBuffer: eventStr = "OMX_EventCmdComplete: cmd=OMX_CommandMarkBuffer"; break;
+			default:
+				eventStr = "OMX_EventCmdComplete: cmd=??";
+			} 
+			break;	
+		case OMX_EventError: eventStr = "OMX_EventError"; 
+				omxShowState(component);
+				break;	
 		case OMX_EventMark: eventStr = "OMX_EventMark"; break;	
 		case OMX_EventPortSettingsChanged: 
 			eventStr = "OMX_EventPortSettingsChanged";
 			component->portSettingChanged = 1;
+			logInfo(LOG_OMX, "%s: component->portSettingChanged = 1.\n", component->componentName);
 			break;	
 		case OMX_EventBufferFlag: eventStr = "OMX_EventBufferFlag"; break;	
 		case OMX_EventResourcesAcquired: eventStr = "OMX_EventResourcesAcquired"; break;	
@@ -341,13 +354,13 @@ OMX_ERRORTYPE omxEmptyBufferDoneCallback(
 		pBuffer->nFilledLen      = 0;
 		pBuffer->nOffset         = 0;
 
-		if (component->inputBuffer == NULL) {
-			component->inputBuffer = createSimpleListItem(pBuffer);
-			component->inputBufferEnd = component->inputBuffer;
+		if (component->inputBufferHdr == NULL) {
+			component->inputBufferHdr = createSimpleListItem(pBuffer);
+			component->inputBufferHdrEnd = component->inputBufferHdr;
 		}
 		else {
-			addObjectToSimpleList(component->inputBufferEnd, pBuffer);
-			component->inputBufferEnd = component->inputBufferEnd->next;
+			addObjectToSimpleList(component->inputBufferHdrEnd, pBuffer);
+			component->inputBufferHdrEnd = component->inputBufferHdrEnd->next;
 		}
 
 		pthread_cond_broadcast(&component->inputBufferCond);
@@ -375,13 +388,13 @@ OMX_ERRORTYPE omxFillBufferDoneCallback(
 		pBuffer->nFilledLen      = 0;
 		pBuffer->nOffset         = 0;
 
-		if (component->inputBuffer == NULL) {
-			component->inputBuffer = createSimpleListItem(pBuffer);
-			component->inputBufferEnd = component->inputBuffer;
+		if (component->inputBufferHdr == NULL) {
+			component->inputBufferHdr = createSimpleListItem(pBuffer);
+			component->inputBufferHdrEnd = component->inputBufferHdr;
 		}
 		else {
-			addObjectToSimpleList(component->inputBufferEnd, pBuffer);
-			component->inputBufferEnd = component->inputBufferEnd->next;
+			addObjectToSimpleList(component->inputBufferHdrEnd, pBuffer);
+			component->inputBufferHdrEnd = component->inputBufferHdrEnd->next;
 		}
 
 		pthread_cond_broadcast(&component->inputBufferCond);
@@ -436,8 +449,13 @@ struct OMX_COMPONENT_T *omxCreateComponent(char *componentName, OMX_INDEXTYPE pa
 	newComponent->eventListEnd = NULL;
 	newComponent->componentName = componentName;
 	newComponent->inputBuffer = NULL;
+	newComponent->inputBufferEnd = NULL;
+	newComponent->inputBufferHdr = NULL;
+	newComponent->inputBufferHdrEnd = NULL;
 	newComponent->portSettingChanged = 0;
 	newComponent->isClock = 0;
+	newComponent->hasBuffers = 0;
+	newComponent->changingStateToLoadedFromIdle = 0;
 
 	newComponent->callbacks.EventHandler    = &omxEventHandlerCallback;
 	newComponent->callbacks.EmptyBufferDone = &omxEmptyBufferDoneCallback;
@@ -502,10 +520,33 @@ struct OMX_COMPONENT_T *omxCreateComponent(char *componentName, OMX_INDEXTYPE pa
 
 	newComponent->inputPort = port_param.nStartPortNumber;
 	newComponent->outputPort = port_param.nStartPortNumber + 1;
+	newComponent->clockPort = -1;
 
 	if (strcmp(componentName, "OMX.broadcom.audio_mixer") == 0) {
-		newComponent->inputPort  = port_param.nStartPortNumber + 1;
-		newComponent->outputPort = port_param.nStartPortNumber;
+		newComponent->inputPort  = port_param.nStartPortNumber + 2;
+		newComponent->outputPort = port_param.nStartPortNumber + 1;
+		newComponent->clockPort = port_param.nStartPortNumber;
+	}
+
+	if (strcmp(componentName, "OMX.broadcom.clock") == 0) {
+		logInfo(LOG_OMX, "OMX.broadcom.clock port_param.nStartPortNumber=%d.\n", port_param.nStartPortNumber);
+		newComponent->clockPort = port_param.nStartPortNumber;
+		newComponent->inputPort = -1;
+		newComponent->outputPort = -1;
+	}
+
+	if (strcmp(componentName, "OMX.broadcom.video_scheduler") == 0) {
+		logInfo(LOG_OMX, "OMX.broadcom.video_scheduler port_param.nStartPortNumber=%d.\n", port_param.nStartPortNumber);
+		newComponent->clockPort = port_param.nStartPortNumber + 2;
+	}
+
+	if (strcmp(componentName, "OMX.broadcom.video_render") == 0) {
+		newComponent->outputPort = -1;
+	}
+
+	if (strcmp(componentName, "OMX.broadcom.audio_render") == 0) {
+		newComponent->clockPort = port_param.nStartPortNumber + 1;
+		newComponent->outputPort = -1;
 	}
 
 	if (newComponent->outputPort > port_param.nStartPortNumber+port_param.nPorts-1)
@@ -531,11 +572,15 @@ OMX_STATETYPE omxGetState(struct OMX_COMPONENT_T *component)
 	return (OMX_STATETYPE)0;
 }
 
-OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STATETYPE state)
+OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STATETYPE state, uint64_t timeout)
 {
 
 	OMX_ERRORTYPE omx_err = OMX_ErrorNone;
 	OMX_STATETYPE state_actual = OMX_StateMax;
+
+	if (!component) {
+		return OMX_ErrorNone;
+	}
 
 	if(!component->handle) {
 		return OMX_ErrorUndefined;
@@ -548,7 +593,7 @@ OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STA
 
 
 	logInfo(LOG_OMX_DEBUG, "before OMX_SendCommand (component=%s).\n", component->componentName);
-	omx_err = OMX_SendCommand(component->handle, OMX_CommandStateSet, state, 0);
+	omx_err = OMX_SendCommand(component->handle, OMX_CommandStateSet, state, NULL);
 	logInfo(LOG_OMX_DEBUG, "after OMX_SendCommand (component=%s).\n", component->componentName);
 	
 	if (omx_err != OMX_ErrorNone) {
@@ -562,12 +607,24 @@ OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STA
 	}
 	else {
 		logInfo(LOG_OMX_DEBUG, "omx_err == OMX_ErrorNone (component=%s).\n", component->componentName);
-		omx_err = omxWaitForCommandComplete(component, OMX_CommandStateSet, state, 50000);
+		omx_err = omxWaitForCommandComplete(component, OMX_CommandStateSet, state, timeout);
 		logInfo(LOG_OMX_DEBUG, "after omxWaitForCommandComplete (component=%s).\n", component->componentName);
-		if(omx_err == OMX_ErrorSameState) {
+		if (omx_err == OMX_ErrorTimeout) {
+			logInfo(LOG_OMX, "Waiting for command complete timedout for component '%s' OMX_CommandStateSet.\n", component->componentName);
+		}
+		else {
+			if (omx_err != OMX_ErrorNone) {
+				logInfo(LOG_OMX, "Error Waiting for command complete for component '%s' OMX_CommandStateSet.\n", component->componentName);
+			}
+			else {
+				logInfo(LOG_OMX_DEBUG, "Received valid command complete OMX_CommandStateSet for component '%s'.\n", component->componentName);
+			}
+		}
+
+/*		if(omx_err != OMX_ErrorSameState) {
 			logInfo(LOG_OMX, "%s ignore OMX_ErrorSameState\n", component->componentName);
 			return OMX_ErrorNone;
-		}
+		}*/
 	}
 
 
@@ -577,6 +634,8 @@ OMX_ERRORTYPE omxSetStateForComponent(struct OMX_COMPONENT_T *component, OMX_STA
 
 OMX_ERRORTYPE omxEnablePort(struct OMX_COMPONENT_T *component, unsigned int port,  int wait)
 {
+	if (port == -1) return OMX_ErrorNone;
+
 	OMX_ERRORTYPE omx_err = OMX_ErrorNone;
 
 	OMX_PARAM_PORTDEFINITIONTYPE portFormat;
@@ -591,6 +650,7 @@ OMX_ERRORTYPE omxEnablePort(struct OMX_COMPONENT_T *component, unsigned int port
 	}
 
 	if(portFormat.bEnabled == OMX_FALSE) {
+		logInfo(LOG_OMX_DEBUG, "Going to enable port %d on component %s.\n", port, component->componentName);
 		omx_err = OMX_SendCommand(component->handle, OMX_CommandPortEnable, port, NULL);
 		if(omx_err != OMX_ErrorNone) {
 			logInfo(LOG_OMX, "Error enable port %d on component %s omx_err(0x%08x).\n",  port, component->componentName, (int)omx_err);
@@ -599,8 +659,10 @@ OMX_ERRORTYPE omxEnablePort(struct OMX_COMPONENT_T *component, unsigned int port
 	}
 	else {
 		logInfo(LOG_OMX_DEBUG, "Port %d on component %s already enabled.\n", port, component->componentName);
-		if(wait)
+		if(wait) {
+			logInfo(LOG_OMX_DEBUG, "Going to wait for event enabled Port %d on component %s.\n", port, component->componentName);
 			omx_err = omxWaitForCommandComplete(component, OMX_CommandPortEnable, port, 1000);
+		}
 	}
 
 	return omx_err;
@@ -608,6 +670,8 @@ OMX_ERRORTYPE omxEnablePort(struct OMX_COMPONENT_T *component, unsigned int port
 
 OMX_ERRORTYPE omxDisablePort(struct OMX_COMPONENT_T *component, unsigned int port, int wait)
 {
+	if (port == -1) return OMX_ErrorNone;
+
 	OMX_ERRORTYPE omx_err = OMX_ErrorNone;
 
 	OMX_PARAM_PORTDEFINITIONTYPE portFormat;
@@ -630,8 +694,10 @@ OMX_ERRORTYPE omxDisablePort(struct OMX_COMPONENT_T *component, unsigned int por
 	}
 	else {
 		logInfo(LOG_OMX_DEBUG, "Port %d on component %s already disabled.\n", port, component->componentName);
-		if(wait)
+		if(wait) {
+			logInfo(LOG_OMX_DEBUG, "Going to wait for event disabled Port %d on component %s.\n", port, component->componentName);
 			omx_err = omxWaitForCommandComplete(component, OMX_CommandPortDisable, port, 1000);
+		}
 	}
 
 	return omx_err;
@@ -639,6 +705,8 @@ OMX_ERRORTYPE omxDisablePort(struct OMX_COMPONENT_T *component, unsigned int por
 
 struct OMX_TUNNEL_T *omxCreateTunnel(struct OMX_COMPONENT_T *sourceComponent,unsigned int sourcePort,struct OMX_COMPONENT_T *destComponent,unsigned int destPort)
 {
+	if ((sourcePort == -1) || (destPort == -1)) return NULL;
+
 	struct OMX_TUNNEL_T *newTunnel = malloc(sizeof(struct OMX_TUNNEL_T));
 
 	if (newTunnel == NULL) {
@@ -685,7 +753,7 @@ OMX_ERRORTYPE omxEstablishTunnel(struct OMX_TUNNEL_T *tunnel)
 	OMX_ERRORTYPE omx_err;
 	if(omxGetState(tunnel->sourceComponent) == OMX_StateLoaded) {
 	logInfo(LOG_OMX_DEBUG, "omxGetState of source component == OMX_StateLoaded.\n");
-		omx_err = omxSetStateForComponent(tunnel->sourceComponent, OMX_StateIdle);
+		omx_err = omxSetStateForComponent(tunnel->sourceComponent, OMX_StateIdle, 5000);
 		if(omx_err != OMX_ErrorNone) {
 			logInfo(LOG_OMX, "Error setting state to idle %s omx_err(0x%08x)", tunnel->sourceComponent->componentName, (int)omx_err);
 			return omx_err;
@@ -738,24 +806,26 @@ OMX_ERRORTYPE omxEstablishTunnel(struct OMX_TUNNEL_T *tunnel)
 	if(omxGetState(tunnel->destComponent) == OMX_StateLoaded) {
 		omx_err = omxWaitForCommandComplete(tunnel->destComponent, OMX_CommandPortEnable, tunnel->destPort, 50000);
 		if(omx_err != OMX_ErrorNone) {
+			logInfo(LOG_OMX, "Error enabling destport for %s omx_err(0x%08x)\n", tunnel->destComponent->componentName, (int)omx_err);
 			return omx_err;
 		}
 
-		omx_err = omxSetStateForComponent(tunnel->destComponent, OMX_StateIdle);
+		omx_err = omxSetStateForComponent(tunnel->destComponent, OMX_StateIdle, 50000);
 		if(omx_err != OMX_ErrorNone) {
-			logInfo(LOG_OMX, "Error setting state to idle %s omx_err(0x%08x)", tunnel->destComponent->componentName, (int)omx_err);
+			logInfo(LOG_OMX, "Error setting state to idle %s omx_err(0x%08x)\n", tunnel->destComponent->componentName, (int)omx_err);
 			return omx_err;
 		}
 	}
 	else {
 		omx_err = omxWaitForCommandComplete(tunnel->destComponent, OMX_CommandPortEnable, tunnel->destPort, 50000);
 		if(omx_err != OMX_ErrorNone) {
+			logInfo(LOG_OMX, "Error enabling destport for %s omx_err(0x%08x)\n", tunnel->destComponent->componentName, (int)omx_err);
 			return omx_err;
 		}
 	}
 	logInfo(LOG_OMX_DEBUG, "destport is enabled destcomponent.\n");
 
-	omx_err = omxWaitForCommandComplete(tunnel->sourceComponent, OMX_CommandPortEnable, tunnel->sourcePort, 1000);
+	omx_err = omxWaitForCommandComplete(tunnel->sourceComponent, OMX_CommandPortEnable, tunnel->sourcePort, 50000);
 	if(omx_err != OMX_ErrorNone) {
 		return omx_err;
 	}
@@ -804,7 +874,7 @@ OMX_ERRORTYPE omxDisconnectTunnel(struct OMX_TUNNEL_T *tunnel)
 
 	if (tunnel->tunnelIsUp == 0) return OMX_ErrorNone;
 
-	if ((tunnel->sourceComponent->portSettingChanged == 0) && (tunnel->sourceComponent->isClock == 0)) {
+/*	if ((tunnel->sourceComponent->portSettingChanged == 0) && (tunnel->sourceComponent->isClock == 0)) {
 
 		omxErr = omxWaitForEvent(tunnel->sourceComponent, OMX_EventPortSettingsChanged, tunnel->sourcePort, 0);
 		if(omxErr != OMX_ErrorNone) {
@@ -813,7 +883,7 @@ OMX_ERRORTYPE omxDisconnectTunnel(struct OMX_TUNNEL_T *tunnel)
 			return omxErr;
 		}
 	}
-
+*/
 	omxShowState(tunnel->sourceComponent);
 	omxShowState(tunnel->destComponent);
 
@@ -877,10 +947,10 @@ struct OMX_CLOCK_T *omxCreateClock(int hasVideo, int hasAudio, int hasText, int 
 	if (hasVideo == 1) {
 		clock.nWaitMask |= OMX_CLOCKPORT1;
 	}
-	if (hasText == 1) {
+/*	if (hasText == 1) {
 		clock.nWaitMask |= OMX_CLOCKPORT2;
 	}
-
+*/
 	OMX_ERRORTYPE omxErr;
 
 	omxErr = OMX_SetConfig(newClock->clockComponent->handle, OMX_IndexConfigTimeClockState, &clock);
@@ -945,6 +1015,25 @@ void omxDestroyClock(struct OMX_CLOCK_T *clock)
 	free(clock);
 }
 
+OMX_ERRORTYPE omxGetClockCurrentMediaTime(struct OMX_CLOCK_T *clock, int port, OMX_TICKS *outTimeStamp)
+{
+	OMX_ERRORTYPE omxErr = OMX_ErrorNone;
+
+	OMX_TIME_CONFIG_TIMESTAMPTYPE timeStampConfig;
+	OMX_INIT_STRUCTURE(timeStampConfig);
+	timeStampConfig.nPortIndex = port;
+
+	omxErr = OMX_GetConfig(clock->clockComponent->handle, OMX_IndexConfigTimeCurrentMediaTime, &timeStampConfig);
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error on getting OMX_IndexConfigTimeCurrentMediaTime. (omxErr=0x%08x)\n", omxErr);
+		return omxErr;
+	}
+
+	*outTimeStamp = timeStampConfig.nTimestamp;
+
+	return omxErr;
+}
+
 OMX_ERRORTYPE omxAllocInputBuffers(struct OMX_COMPONENT_T *component, int useBuffers)
 {
 	OMX_ERRORTYPE omxErr = OMX_ErrorNone;
@@ -964,9 +1053,9 @@ OMX_ERRORTYPE omxAllocInputBuffers(struct OMX_COMPONENT_T *component, int useBuf
 
 	if(omxGetState(component) != OMX_StateIdle) {
 		if(omxGetState(component) != OMX_StateLoaded)
-			omxSetStateForComponent(component, OMX_StateLoaded);
+			omxSetStateForComponent(component, OMX_StateLoaded, 5000);
 
-		omxSetStateForComponent(component, OMX_StateIdle);
+		omxSetStateForComponent(component, OMX_StateIdle, 5000);
 	}
 
 	omxErr = omxEnablePort(component, component->inputPort, 0);
@@ -979,9 +1068,9 @@ OMX_ERRORTYPE omxAllocInputBuffers(struct OMX_COMPONENT_T *component, int useBuf
 	component->inputBufferCount  = portFormat.nBufferCountActual;
 	component->inputBufferSize   = portFormat.nBufferSize;
 
-	logInfo(LOG_OMX_DEBUG, "Component(%s) - port(%d), nBufferCountMin(%lu), nBufferCountActual(%lu), nBufferSize(%lu), nBufferAlignmen(%lu)\n",
-	    component->componentName, component->inputPort, portFormat.nBufferCountMin,
-	    portFormat.nBufferCountActual, portFormat.nBufferSize, portFormat.nBufferAlignment);
+	logInfo(LOG_OMX, "Component(%s) - port(%d), nBufferCountMin(%lu), nBufferCountActual(%lu), nBufferSize(%lu), nBufferAlignmen(%lu)\n",
+	    component->componentName, component->inputPort, (long unsigned int)portFormat.nBufferCountMin,
+	    (long unsigned int)portFormat.nBufferCountActual, (long unsigned int)portFormat.nBufferSize, (long unsigned int)portFormat.nBufferAlignment);
 
 	size_t i;
 	for (i = 0; i < portFormat.nBufferCountActual; i++) {
@@ -1014,17 +1103,30 @@ OMX_ERRORTYPE omxAllocInputBuffers(struct OMX_COMPONENT_T *component, int useBuf
 		buffer->nOffset         = 0;
 		buffer->pAppPrivate     = (void*)i; 
 
-		if (component->inputBuffer == NULL) {
-			component->inputBuffer = createSimpleListItem(buffer);
-			component->inputBufferEnd = component->inputBuffer;
+		if (component->inputUseBuffers) {
+			if (component->inputBuffer == NULL) {
+				component->inputBuffer = createSimpleListItem(data);
+				component->inputBufferEnd = component->inputBuffer;
+			}
+			else {
+				addObjectToSimpleList(component->inputBufferEnd, data);
+				component->inputBufferEnd = component->inputBufferEnd->next;
+			}
+		}
+
+		if (component->inputBufferHdr == NULL) {
+			component->inputBufferHdr = createSimpleListItem(buffer);
+			component->inputBufferHdrEnd = component->inputBufferHdr;
 		}
 		else {
-			addObjectToSimpleList(component->inputBufferEnd, buffer);
-			component->inputBufferEnd = component->inputBufferEnd->next;
+			addObjectToSimpleList(component->inputBufferHdrEnd, buffer);
+			component->inputBufferHdrEnd = component->inputBufferHdrEnd->next;
 		}
 	}
 
-	omxErr = omxWaitForCommandComplete(component, OMX_CommandPortEnable, component->inputPort, 10000); 
+	component->hasBuffers = 1;
+
+	omxErr = omxWaitForCommandComplete(component, OMX_CommandPortEnable, component->inputPort, 50000); 
 	if(omxErr != OMX_ErrorNone) {
 		logInfo(LOG_OMX, "Component(%s) - timeout while waiting for completion of port enable command. omxErr(0x%x)\n",
 			component->componentName, omxErr);
@@ -1040,29 +1142,68 @@ void omxFreeInputBuffers(struct OMX_COMPONENT_T *component)
 {
 	if (component == NULL) return;
 
-	if (component->inputBuffer == NULL) return;
+	if (component->inputBufferHdr == NULL) return;
 
 	pthread_mutex_lock(&component->inputMutex);
 	pthread_cond_broadcast(&component->inputBufferCond);
 
-	omxDisablePort(component, component->inputPort, 0);
+	if (component->changingStateToLoadedFromIdle == 0) {
+		omxDisablePort(component, component->inputPort, 0);
+	}
 
-	struct SIMPLELISTITEM_T *tmpItem = component->inputBuffer;
+	// Wait until all buffers have returned by component
+	struct timespec interval;
+	struct timespec remainingInterval;
+	uint64_t counter = 0;
+	if (simpleListCount(component->inputBufferHdr) != component->inputBufferCount) {
+		logInfo(LOG_OMX, "Component(%s) - Not all buffers (%d of %d) have been returned by component. Waiting for component.\n",component->componentName, simpleListCount(component->inputBufferHdr), component->inputBufferCount);
+	}
+
+	while ((simpleListCount(component->inputBufferHdr) != component->inputBufferCount) && (counter < 1000000)) {
+		interval.tv_sec = 0;
+		interval.tv_nsec = 10000;
+
+		nanosleep(&interval, &remainingInterval);
+		counter++;
+	}
+	if (simpleListCount(component->inputBufferHdr) != component->inputBufferCount) {
+		logInfo(LOG_OMX, "Component(%s) - Not all buffers (%d of %d) have been returned by component. Timedout.\n",component->componentName, simpleListCount(component->inputBufferHdr), component->inputBufferCount);
+	}
+
+	counter = 0;
+	struct SIMPLELISTITEM_T *tmpItem = component->inputBufferHdr;
 	while (tmpItem != NULL) {
-		OMX_BUFFERHEADERTYPE *buffer = tmpItem->object;
+		OMX_BUFFERHEADERTYPE *bufferHdr = tmpItem->object;
 
-		OMX_FreeBuffer(component->handle, component->inputPort, buffer);
+		OMX_FreeBuffer(component->handle, component->inputPort, bufferHdr);
+		counter++;
 
-		if(component->inputUseBuffers) {
-			free(buffer); 
-		}
 		tmpItem = tmpItem->next;
 	}
-	freeSimpleList(component->inputBuffer);
-	component->inputBuffer = NULL;
-	component->inputBufferEnd = NULL;
+	freeSimpleList(component->inputBufferHdr);
+	component->inputBufferHdr = NULL;
+	component->inputBufferHdrEnd = NULL;
+	logInfo(LOG_OMX, "Component(%s) - Freed %"  PRId64 " buffers.\n",component->componentName, counter);
 
-	omxWaitForCommandComplete(component, OMX_CommandPortDisable, component->inputPort, 2000); 
+	if(component->inputUseBuffers) {
+		tmpItem = component->inputBuffer;
+		while (tmpItem != NULL) {
+			OMX_U8 *buffer = tmpItem->object;
+
+			free(buffer); 
+
+			tmpItem = tmpItem->next;
+		}
+		freeSimpleList(component->inputBuffer);
+		component->inputBuffer = NULL;
+		component->inputBufferEnd = NULL;
+	}
+
+	component->hasBuffers = 0;
+
+	if (component->changingStateToLoadedFromIdle == 0) {
+		omxWaitForCommandComplete(component, OMX_CommandPortDisable, component->inputPort, 2000); 
+	}
 
 	component->inputAlignment    = 0;
 	component->inputBufferCount  = 0;
@@ -1086,7 +1227,7 @@ OMX_BUFFERHEADERTYPE *omxGetInputBuffer(struct OMX_COMPONENT_T *component , long
 {
 	pthread_mutex_lock(&component->inputMutex);
 
-	if (component->inputBuffer == NULL) {
+	if (component->inputBufferHdr == NULL) {
 
 		struct timespec endtime;
 		clock_gettime(CLOCK_REALTIME, &endtime);
@@ -1102,11 +1243,11 @@ OMX_BUFFERHEADERTYPE *omxGetInputBuffer(struct OMX_COMPONENT_T *component , long
 
 	}
 
-	OMX_BUFFERHEADERTYPE *result = component->inputBuffer->object;
-	struct SIMPLELISTITEM_T *oldItem = component->inputBuffer;
-	component->inputBuffer = component->inputBuffer->next;
-	if (component->inputBuffer == NULL) {
-		component->inputBufferEnd = NULL;
+	OMX_BUFFERHEADERTYPE *result = component->inputBufferHdr->object;
+	struct SIMPLELISTITEM_T *oldItem = component->inputBufferHdr;
+	component->inputBufferHdr = component->inputBufferHdr->next;
+	if (component->inputBufferHdr == NULL) {
+		component->inputBufferHdrEnd = NULL;
 	}
 
 	pthread_mutex_unlock(&component->inputMutex);
@@ -1114,6 +1255,7 @@ OMX_BUFFERHEADERTYPE *omxGetInputBuffer(struct OMX_COMPONENT_T *component , long
 	if (oldItem != NULL) {
 		freeSimpleListItem(oldItem);
 	}
+	logInfo(LOG_OMX_DEBUG, "Got buffer from %s\n", component->componentName);
 
 	return result;
 }
@@ -1152,7 +1294,7 @@ OMX_ERRORTYPE omxFlushTunnel(struct OMX_TUNNEL_T *tunnel)
 
 void omxFlushPort(struct OMX_COMPONENT_T *component, unsigned int port)
 {
-	if (component == NULL) return;
+	if ((component == NULL) || (port == -1)) return;
 
 	pthread_mutex_lock(&component->componentMutex);
 
@@ -1164,29 +1306,133 @@ void omxFlushPort(struct OMX_COMPONENT_T *component, unsigned int port)
 		logInfo(LOG_OMX, "Error OMX_CommandFlush on port %d for component %s. (omxErr = 0x%08x).\n", port, component->componentName, omxErr);
 	}
 
-	omxErr = omxWaitForCommandComplete(component, OMX_CommandFlush, port, 2000);
+	omxErr = omxWaitForCommandComplete(component, OMX_CommandFlush, port, 50000);
 	if(omxErr != OMX_ErrorNone) {
-		logInfo(LOG_OMX, "Error omxWaitForCommandComplete on port %d for component %s. (omxErr = 0x%08x).\n", port, component->componentName, omxErr);
+		logInfo(LOG_OMX, "Error omxWaitForCommandComplete event OMX_CommandFlush on port %d for component %s. (omxErr = 0x%08x).\n", port, component->componentName, omxErr);
 	}
 
 	pthread_mutex_unlock(&component->componentMutex);
 }
 
-void omxChangeStateToLoaded(struct OMX_COMPONENT_T *component)
+void omxChangeStateToLoaded(struct OMX_COMPONENT_T *component, uint8_t freeBuffers)
 {
+	if (component == NULL) return;
 
-	if (omxGetState(component) == OMX_StateExecuting) {
-		omxSetStateForComponent(component, OMX_StatePause);
+	if (omxGetState(component) == OMX_StateLoaded) {
+		logInfo(LOG_OMX, "%s has state OMX_StateLoaded not going to change state.\n", component->componentName);
+		return;
 	}
 
-	if (omxGetState(component) != OMX_StateIdle) {
-		omxSetStateForComponent(component, OMX_StateIdle);
+	OMX_ERRORTYPE omxErr = OMX_ErrorNone;
+	int counter = 0;
+	while ((omxGetState(component) != OMX_StateLoaded) && (omxErr == OMX_ErrorNone) && (counter < 5)) {
+		if (omxGetState(component) == OMX_StateIdle) {
+			logInfo(LOG_OMX, "%s has state OMX_StateIdle going to change to OMX_StateLoaded.\n", component->componentName);
+			
+			if (component->hasBuffers) {
+				omxErr = omxSetStateForComponent(component, OMX_StateLoaded, 1);
+				logInfo(LOG_OMX, "%s Going to free buffers so state can change to OMX_StateLoaded.\n", component->componentName);
+				component->changingStateToLoadedFromIdle = 1;
+				omxFreeInputBuffers(component);
+				component->changingStateToLoadedFromIdle = 0;
+				logInfo(LOG_OMX, "%s Waiting for event OMX_StateLoaded.\n", component->componentName);
+				omxErr = omxWaitForCommandComplete(component, OMX_CommandStateSet, OMX_StateLoaded, 5000000);
+				if (omxErr == OMX_ErrorTimeout) {
+					logInfo(LOG_OMX, "Waiting for command complete timedout for component '%s' OMX_CommandStateSet to OMX_StateLoaded.\n", component->componentName);
+				}
+				else {
+					if (omxErr != OMX_ErrorNone) {
+						logInfo(LOG_OMX, "Error Waiting for command complete for component '%s' OMX_CommandStateSet to OMX_StateLoaded.\n", component->componentName);
+					}
+					else {
+						logInfo(LOG_OMX, "Received valid command complete OMX_CommandStateSet to OMX_StateLoaded for component '%s'.\n", component->componentName);
+					}
+				}
+			}
+			else {
+				omxErr = omxSetStateForComponent(component, OMX_StateLoaded, 5000000);
+				if (omxErr != OMX_ErrorNone) {
+					if (omxErr == OMX_ErrorTimeout) {
+						logInfo(LOG_OMX, "Error changing state from !OMX_StateLoaded to OMX_StateLoaded for %s. Timedout waiting for state change.\n", component->componentName);
+					}
+					else {
+						logInfo(LOG_OMX, "Error changing state from !OMX_StateLoaded to OMX_StateLoaded for %s. (omxErr = 0x%08x)\n", component->componentName, omxErr);
+					}
+				}
+			}
+		}
+		else {			
+			omxShowState(component);
+			logInfo(LOG_OMX, "%s has state !OMX_StateIdle going to change to OMX_StateIdle.\n", component->componentName);
+			OMX_ERRORTYPE omxErr = omxSetStateForComponent(component, OMX_StateIdle, 5000000);
+			if (omxErr != OMX_ErrorNone) {
+				logInfo(LOG_OMX, "Error changing state from !OMX_StateIdle to OMX_StateIdle for %s. (omxErr = 0x%08x)\n", component->componentName, omxErr);
+			}
+		}
+		counter++;
 	}
 
 	if (omxGetState(component) != OMX_StateLoaded) {
-		omxSetStateForComponent(component, OMX_StateLoaded);
+		omxShowState(component);
+		logInfo(LOG_OMX, "Failed changing state from !OMX_StateLoaded to OMX_StateLoaded for %s. (omxErr = 0x%08x)\n", component->componentName, omxErr);
 	}
 
+/*	if (omxGetState(component) == OMX_StateExecuting) {
+		logInfo(LOG_OMX, "%s has state OMX_StateExecuting going to change to OMX_StatePause.\n", component->componentName);
+		OMX_ERRORTYPE omxErr = omxSetStateForComponent(component, OMX_StatePause, 5000000);
+		if (omxErr != OMX_ErrorNone) {
+			logInfo(LOG_OMX, "Error changing state from OMX_StateExecuting to OMX_StatePause for %s. (omxErr = 0x%08x)\n", component->componentName, omxErr);
+		}
+	}
+
+	if (omxGetState(component) != OMX_StateIdle) {
+		logInfo(LOG_OMX, "%s has state !OMX_StateIdle going to change to OMX_StateIdle.\n", component->componentName);
+		OMX_ERRORTYPE omxErr = omxSetStateForComponent(component, OMX_StateIdle, 5000000);
+		if (omxErr != OMX_ErrorNone) {
+			logInfo(LOG_OMX, "Error changing state from !OMX_StateIdle to OMX_StateIdle for %s. (omxErr = 0x%08x)\n", component->componentName, omxErr);
+		}
+	}
+
+	if (omxGetState(component) != OMX_StateLoaded) {
+		logInfo(LOG_OMX, "%s has state !OMX_StateLoaded going to change to OMX_StateLoaded.\n", component->componentName);
+		OMX_ERRORTYPE omxErr;
+		if (component->hasBuffers) {
+			omxErr = omxSetStateForComponent(component, OMX_StateLoaded, 5000);
+		}
+		else {
+			omxErr = omxSetStateForComponent(component, OMX_StateLoaded, 5000000);
+		}
+		if (omxErr != OMX_ErrorNone) {
+			if (omxErr == OMX_ErrorTimeout) {
+				if (component->hasBuffers) {
+					logInfo(LOG_OMX, "%s Going to free buffers so state can change to OMX_StateLoaded.\n", component->componentName);
+					component->changingStateToLoadedFromIdle = 1;
+					omxFreeInputBuffers(component);
+					component->changingStateToLoadedFromIdle = 0;
+					logInfo(LOG_OMX, "%s Waiting for event OMX_StateLoaded.\n", component->componentName);
+					omxErr = omxWaitForCommandComplete(component, OMX_CommandStateSet, OMX_StateLoaded, 5000000);
+					if (omxErr == OMX_ErrorTimeout) {
+						logInfo(LOG_OMX, "Waiting for command complete timedout for component '%s' OMX_CommandStateSet to OMX_StateLoaded.\n", component->componentName);
+					}
+					else {
+						if (omxErr != OMX_ErrorNone) {
+							logInfo(LOG_OMX, "Error Waiting for command complete for component '%s' OMX_CommandStateSet to OMX_StateLoaded.\n", component->componentName);
+						}
+						else {
+							logInfo(LOG_OMX_DEBUG, "Received valid command complete OMX_CommandStateSet to OMX_StateLoaded for component '%s'.\n", component->componentName);
+						}
+					}
+				}
+				else {
+					logInfo(LOG_OMX, "%s No buffers to free.\n", component->componentName);
+				}
+			}
+			else {
+				logInfo(LOG_OMX, "Error changing state from !OMX_StateLoaded to OMX_StateLoaded for %s. (omxErr = 0x%08x)\n", component->componentName, omxErr);
+			}
+		}
+	}
+*/
 }
 
 void omxDestroyComponent(struct OMX_COMPONENT_T *component)
@@ -1200,14 +1446,14 @@ void omxDestroyComponent(struct OMX_COMPONENT_T *component)
 
 	if (component->isClock == 0) {
 		omxFlushPort(component, component->inputPort);
+		omxFlushPort(component, component->outputPort);
 	}
-	omxFlushPort(component, component->outputPort);
 
-	if (component->isClock == 0) {
+/*	if (component->isClock == 0) {
 		omxFreeInputBuffers(component);
 	}
-
-	omxChangeStateToLoaded(component);
+*/
+	omxChangeStateToLoaded(component, 1);
 
 	OMX_ERRORTYPE omxErr = OMX_FreeHandle(component->handle);
 	if(omxErr != OMX_ErrorNone) {

@@ -39,10 +39,14 @@
 #include <libavutil/audioconvert.h>
 #include <libswresample/swresample.h>
 #include <libavutil/opt.h>
+#include <libswscale/swscale.h>
 
 #ifndef FFMPEG_FILE_BUFFER_SIZE
-#define FFMPEG_FILE_BUFFER_SIZE   32768 // default reading size for ffmpeg
+//#define FFMPEG_FILE_BUFFER_SIZE   32768 // default reading size for ffmpeg
+#define FFMPEG_FILE_BUFFER_SIZE   24576 // default reading size for ffmpeg
 #endif
+
+#define MIN_MYTH_QUEUE_LENGTH	FFMPEG_FILE_BUFFER_SIZE * 100
 
 #define DVD_NOPTS_VALUE    (-1LL<<52)
 #define DVD_TIME_BASE 1000000
@@ -60,26 +64,60 @@ typedef enum {
 	DEMUXER_ERROR_OPEN_AUDIO_CODEC		= -10,
 	DEMUXER_ERROR_START_THREAD		= -11,
 	DEMUXER_ERROR_CREATE_FORMAT_CONTEXT	= -12,
+	DEMUXER_ERROR_CREATE_DVBSUB_CONTEXT	= -8,
+	DEMUXER_ERROR_FIND_DVBSUB_DECODER	= -9,
+	DEMUXER_ERROR_OPEN_DVBSUB_CODEC		= -10,
 } DEMUXER_ERROR_T;
 
 struct DEMUXER_T{
 	int videoStream;
 	int audioStream;
+	int dvbsubStream;
 	AVFormatContext *formatContext;
 	int formatContextIsOpen;
 	struct MYTH_CONNECTION_T *mythConnection;
 	pthread_t demuxerThread;
 	int threadStarted;
+
+	pthread_t videoThread;
+	int videoThreadStarted;
+	int doStopVideoThread;
+	pthread_t audioThread;
+	int audioThreadStarted;
+	int doStopAudioThread;
+	pthread_t subtitleThread;
+	int subtitleThreadStarted;
+	int doStopSubtitleThread;
+
+	pthread_t mythThread;
+	int mythThreadStarted;
+	int doStopMythThread;
+
 	int doStop;
 	pthread_mutex_t threadLock;
+	pthread_mutex_t videoThreadLock;
+	pthread_mutex_t audioThreadLock;
+	pthread_mutex_t subtitleThreadLock;
+	pthread_mutex_t mythThreadLock;
+
+	struct SIMPLELISTITEM_T *subtitleAVPackets;
+	struct SIMPLELISTITEM_T *subtitleAVPacketsEnd;
+
+	struct SIMPLELISTITEM_T *subtitlePackets;
+	struct SIMPLELISTITEM_T *subtitlePacketsEnd;
+
+	struct SIMPLELISTITEM_T *audioPackets;
+	struct SIMPLELISTITEM_T *audioPacketsEnd;
 
 	unsigned char *avioBuffer;
 	AVIOContext *ioContext;
 	AVCodec *videoCodec;
 	AVCodec *audioCodec;
+	AVCodec *dvbsubCodec;
 
 	AVCodecContext *audioCodecContext;
 	AVCodecContext *videoCodecContext;
+	AVCodecContext *dvbsubCodecContext;
 
 	char *nextFile;
 
@@ -117,8 +155,9 @@ struct DEMUXER_T{
 	int swDecodeAudio;
 
 	int deInterlace;
+	int streamIsInterlaced;
 
-	int videoPortSettingChanged;
+	int videoStreamWasInterlaced;
 	int audioPortSettingChanged;
 
 	int64_t startPTS;
@@ -126,12 +165,14 @@ struct DEMUXER_T{
 
 	int lastFrameSize;
 	int newProgram;
+
+	struct OSD_T *subtitleOSD;
 };
 
 int demuxer_error;
 
 void demuxerSetNextFile(struct DEMUXER_T *demuxer, char *filename);
 void demuxerSetLanguage(char *newLanguage);
-struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int showVideo, int playAudio, int audioPassthrough);
+struct DEMUXER_T *demuxerStart(struct MYTH_CONNECTION_T *mythConnection, int showVideo, int playAudio, int showDVBSub, int audioPassthrough);
 void demuxerStop(struct DEMUXER_T *demuxer);
 

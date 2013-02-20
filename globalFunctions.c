@@ -128,7 +128,7 @@ int indexOf(char *text, char *needle)
 	}
 
 #ifdef DEBUG
-		logInfo( LOG_GLOBALFUNCTIONS,"indexOf: 3. No match\n", index);
+		logInfo( LOG_GLOBALFUNCTIONS,"indexOf: 3. No match\n");
 #endif
 	return -1;
 }

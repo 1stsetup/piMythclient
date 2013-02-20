@@ -69,9 +69,9 @@ OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type
 	OMX_INIT_STRUCTURE(image_filter);
 
 	image_filter.nPortIndex = component->outputPort;
-	image_filter.nNumParams = 2;
+	image_filter.nNumParams = 1;
 	image_filter.nParams[0] = 3; // Looks like this is OMX_CONFIG_INTERLACETYPE.eMode
-	image_filter.nParams[1] = 0; // Then this will probably be OMX_CONFIG_INTERLACETYPE.bRepeatFirstField
+//	image_filter.nParams[1] = 0; // Then this will probably be OMX_CONFIG_INTERLACETYPE.bRepeatFirstField
 	image_filter.eImageFilter = (type == 1) ? OMX_ImageFilterDeInterlaceAdvanced : OMX_ImageFilterDeInterlaceLineDouble;
 
 	OMX_ERRORTYPE omxErr;
@@ -85,16 +85,29 @@ OMX_ERRORTYPE omxSetVideoDeInterlace(struct OMX_COMPONENT_T *component, int type
 	return OMX_ErrorNone;
 }
 
+OMX_ERRORTYPE omxGetVideoInterlace(struct OMX_COMPONENT_T *component, OMX_CONFIG_INTERLACETYPE *videoInterlace)
+{
+	OMX_INIT_STRUCTURE(*videoInterlace);
+
+	videoInterlace->nPortIndex = component->outputPort;
+
+	OMX_ERRORTYPE omxErr;
+	omxErr = OMX_GetConfig(component->handle, OMX_IndexConfigCommonInterlace, videoInterlace);
+
+	if(omxErr != OMX_ErrorNone) {
+		logInfo(LOG_OMX, "Error SetConfig OMX_IndexConfigCommonInterlace for port %d status on component %s omxErr(0x%08x)\n", component->outputPort, component->componentName, (int)omxErr);
+		return omxErr;
+	}
+
+	return OMX_ErrorNone;
+}
+	
 OMX_ERRORTYPE omxShowVideoInterlace(struct OMX_COMPONENT_T *component)
 {
 	OMX_CONFIG_INTERLACETYPE videoInterlace;
-	OMX_INIT_STRUCTURE(videoInterlace);
-
-	videoInterlace.nPortIndex = component->outputPort;
 
 	OMX_ERRORTYPE omxErr;
-	omxErr = OMX_GetConfig(component->handle, OMX_IndexConfigCommonInterlace, &videoInterlace);
-
+	omxErr = omxGetVideoInterlace(component, &videoInterlace); 
 	if(omxErr != OMX_ErrorNone) {
 		logInfo(LOG_OMX, "Error SetConfig OMX_IndexConfigCommonInterlace for port %d status on component %s omxErr(0x%08x)\n", component->outputPort, component->componentName, (int)omxErr);
 		return omxErr;
@@ -127,6 +140,28 @@ OMX_ERRORTYPE omxShowVideoInterlace(struct OMX_COMPONENT_T *component)
 	return OMX_ErrorNone;
 }
 
+OMX_ERRORTYPE omxSetVideoCompressionFormat(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat)
+{
+	pthread_mutex_lock(&component->componentMutex);
+
+	OMX_VIDEO_PARAM_PORTFORMATTYPE formatType;
+	OMX_INIT_STRUCTURE(formatType);
+	formatType.nPortIndex = component->inputPort;
+	formatType.eCompressionFormat = compressionFormat;
+
+	OMX_ERRORTYPE omxErr;
+	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamVideoPortFormat, &formatType);
+	if(omxErr != OMX_ErrorNone)
+	{
+		logInfo(LOG_OMX, "error OMX_IndexParamVideoPortFormat omxErr(0x%08x)\n", omxErr);
+		return omxErr;
+	}
+
+	pthread_mutex_unlock(&component->componentMutex);
+
+	return omxErr;
+}
+
 OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *component, OMX_IMAGE_CODINGTYPE compressionFormat,OMX_U32 framerate)
 {
 	pthread_mutex_lock(&component->componentMutex);
@@ -147,6 +182,11 @@ OMX_ERRORTYPE omxSetVideoCompressionFormatAndFrameRate(struct OMX_COMPONENT_T *c
 
 	OMX_ERRORTYPE omxErr;
 	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamVideoPortFormat, &formatType);
+	if(omxErr != OMX_ErrorNone)
+	{
+		logInfo(LOG_OMX, "error OMX_IndexParamVideoPortFormat omxErr(0x%08x)\n", omxErr);
+		return omxErr;
+	}
 
 	pthread_mutex_unlock(&component->componentMutex);
 
@@ -163,7 +203,7 @@ OMX_ERRORTYPE omxVideoSetFrameSize(struct OMX_COMPONENT_T *component, unsigned i
 	omxErr = OMX_GetParameter(component->handle, OMX_IndexParamPortDefinition, &portParam);
 	if(omxErr != OMX_ErrorNone)
 	{
-		logInfo(LOG_OMX, "error OMX_IndexParamPortDefinition omxErr(0x%08x)\n", omxErr);
+		logInfo(LOG_OMX, "error OMX_GetParameter of OMX_IndexParamPortDefinition omxErr(0x%08x)\n", omxErr);
 		return omxErr;
 	}
 
@@ -174,6 +214,11 @@ OMX_ERRORTYPE omxVideoSetFrameSize(struct OMX_COMPONENT_T *component, unsigned i
 	portParam.format.video.nFrameHeight = height;
 
 	omxErr = OMX_SetParameter(component->handle, OMX_IndexParamPortDefinition, &portParam);
+	if(omxErr != OMX_ErrorNone)
+	{
+		logInfo(LOG_OMX, "error OMX_SetParameter OMX_IndexParamPortDefinition omxErr(0x%08x)\n", omxErr);
+		return omxErr;
+	}
 
 	return omxErr;
 }

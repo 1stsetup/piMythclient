@@ -41,7 +41,7 @@
 #ifdef PI
 
 #include "bcm.h"
-#include "vgfont.h"
+//#include "vgfont.h"
 #include <VG/vgu.h>
 
 #endif
@@ -49,8 +49,6 @@
 #include "osd.h"
 
 #ifdef PI
-
-//	s = gx_graphics_init(".");
 
 VGfloat currentColor;
 
@@ -86,41 +84,86 @@ VGfloat currentColor;
 		logInfo(LOG_OSD, "%s: 0x%x\n", userStr, vg_error); \
 }
 
-/*static void showEGLErrorStr(EGLint egl_error, char *userStr)
-{
-		if (egl_error == EGL_NO_SURFACE) logInfo(LOG_OSD, "%s: EGL_NO_SURFACE\n", userStr);
-		if (egl_error == EGL_BAD_DISPLAY) logInfo(LOG_OSD, "%s: EGL_BAD_DISPLAY\n", userStr);
-		if (egl_error == EGL_NOT_INITIALIZED) logInfo(LOG_OSD, "%s: EGL_NOT_INITIALIZED\n", userStr);
-		if (egl_error == EGL_BAD_CONFIG) logInfo(LOG_OSD, "%s: EGL_BAD_CONFIG\n", userStr);
-		if (egl_error == EGL_BAD_NATIVE_WINDOW) logInfo(LOG_OSD, "%s: EGL_BAD_NATIVE_WINDOW\n", userStr);
-		if (egl_error == EGL_BAD_ATTRIBUTE) logInfo(LOG_OSD, "%s: EGL_BAD_ATTRIBUTE\n", userStr);
-		if (egl_error == EGL_BAD_ALLOC) logInfo(LOG_OSD, "%s: EGL_BAD_ALLOC\n", userStr);
-		if (egl_error == EGL_BAD_MATCH) logInfo(LOG_OSD, "%s: EGL_BAD_MATCH\n", userStr);
-		if (egl_error == EGL_BAD_SURFACE) logInfo(LOG_OSD, " %s: EGL_BAD_SURFACE\n", userStr);
-		if (egl_error == EGL_CONTEXT_LOST) logInfo(LOG_OSD, "%s: EGL_CONTEXT_LOST\n", userStr);
-		if (egl_error == EGL_BAD_CONTEXT) logInfo(LOG_OSD, "%s: EGL_BAD_CONTEXT\n", userStr);
-		if (egl_error == EGL_BAD_ACCESS) logInfo(LOG_OSD, "%s: EGL_BAD_ACCESS\n", userStr);
-		if (egl_error == EGL_BAD_NATIVE_PIXMAP) logInfo(LOG_OSD, "%s: EGL_BAD_NATIVE_PIXMAP\n", userStr);
-		if (egl_error == EGL_BAD_CURRENT_SURFACE) logInfo(LOG_OSD, "%s: EGL_BAD_CURRENT_SURFACE\n", userStr);
-		if (egl_error == EGL_BAD_PARAMETER) logInfo(LOG_OSD, "%s: EGL_BAD_PARAMETER\n", userStr);
+EGLDisplay defaultEGLDisplay = EGL_NO_DISPLAY;
+int eglInitializeCount = 0;
 
-		logInfo(LOG_OSD, "%s: 0x%x\n", userStr, egl_error);
+EGLDisplay initializeEGL()
+{
+	// EGL init
+	if (defaultEGLDisplay != EGL_NO_DISPLAY) goto eglEnd;
+
+	defaultEGLDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	if (defaultEGLDisplay == EGL_NO_DISPLAY) {
+		EGLint egl_error = eglGetError();
+		showEGLErrorStr(egl_error, "eglGetDisplay");
+		return defaultEGLDisplay;
+	}
+
+	EGLint egl_maj, egl_min;
+	EGLBoolean egl_ret;
+
+	egl_ret = eglInitialize(defaultEGLDisplay, &egl_maj, &egl_min);
+	if (egl_ret == EGL_FALSE)
+	{
+		EGLint egl_error = eglGetError();
+		showEGLErrorStr(egl_error, "eglInitialize");
+		defaultEGLDisplay = EGL_NO_DISPLAY;
+		return defaultEGLDisplay;
+	}
+	logInfo(LOG_OSD, "eglVersion :egl_maj=%d, egl_min=%d\n", egl_maj, egl_min);
+
+eglEnd:
+	logInfo(LOG_OSD, "New handle on EGL.\n");
+
+	eglInitializeCount++;
+	return defaultEGLDisplay;
 }
 
-static void showVGErrorStr(VGErrorCode vg_error, char *userStr)
+void releaseEGL()
 {
-		if (vg_error == VG_BAD_HANDLE_ERROR) logInfo(LOG_OSD, "%s: VG_BAD_HANDLE_ERROR\n", userStr);
-		if (vg_error == VG_ILLEGAL_ARGUMENT_ERROR) logInfo(LOG_OSD, "%s: VG_ILLEGAL_ARGUMENT_ERROR\n", userStr);
-		if (vg_error == VG_OUT_OF_MEMORY_ERROR) logInfo(LOG_OSD, "%s: VG_OUT_OF_MEMORY_ERROR\n", userStr);
-		if (vg_error == VG_PATH_CAPABILITY_ERROR) logInfo(LOG_OSD, "%s: VG_PATH_CAPABILITY_ERROR\n", userStr);
-		if (vg_error == VG_UNSUPPORTED_IMAGE_FORMAT_ERROR) logInfo(LOG_OSD, "%s: VG_UNSUPPORTED_IMAGE_FORMAT_ERROR\n", userStr);
-		if (vg_error == VG_UNSUPPORTED_PATH_FORMAT_ERROR) logInfo(LOG_OSD, "%s: VG_UNSUPPORTED_PATH_FORMAT_ERROR\n", userStr);
-		if (vg_error == VG_IMAGE_IN_USE_ERROR) logInfo(LOG_OSD, "%s: VG_IMAGE_IN_USE_ERROR\n", userStr);
-		if (vg_error == VG_NO_CONTEXT_ERROR) logInfo(LOG_OSD, " %s: VG_NO_CONTEXT_ERROR\n", userStr);
+	eglInitializeCount--;
+	if ((eglInitializeCount == 0) && (defaultEGLDisplay != EGL_NO_DISPLAY)) {
+		EGLBoolean egl_ret;
 
-		logInfo(LOG_OSD, "%s: 0x%x\n", userStr, vg_error);
+		egl_ret = eglTerminate(defaultEGLDisplay);
+		if (egl_ret == EGL_FALSE)
+		{
+			EGLint egl_error = eglGetError();
+			showEGLErrorStr(egl_error, "eglTerminate");
+		}
+		defaultEGLDisplay = EGL_NO_DISPLAY;
+		logInfo(LOG_OSD, "Terminated EGL because last handle was released.\n");
+	}
 }
-*/
+
+DISPMANX_DISPLAY_HANDLE_T dispmanxDisplay = DISPMANX_NO_HANDLE;
+int dispmanxCount = 0;
+
+DISPMANX_DISPLAY_HANDLE_T initializeDispmanxDisplay()
+{
+	if (dispmanxDisplay != DISPMANX_NO_HANDLE) goto dispmanxEnd;
+
+	dispmanxDisplay = vc_dispmanx_display_open(0 /* LCD */);
+	if (dispmanxDisplay == DISPMANX_NO_HANDLE) {
+		logInfo(LOG_OSD, "Could not vc_dispmanx_display_open.\n");
+		return DISPMANX_NO_HANDLE;
+	}
+
+dispmanxEnd:
+
+	logInfo(LOG_OSD, "New handle to vc_dispmanx_display.\n");
+	dispmanxCount++;
+	return dispmanxDisplay;
+}
+
+void releaseDispmanxDisplay()
+{
+	dispmanxCount--;
+	if ((dispmanxCount == 0) && (dispmanxDisplay != DISPMANX_NO_HANDLE)) {
+		vc_dispmanx_display_close(dispmanxDisplay);
+		logInfo(LOG_OSD, "Closed vc_dispmanx_display because last handle was released.\n");
+	}
+}
 
 static int graphicsEGLAttribColours(EGLint *attribs)
 {
@@ -141,7 +184,7 @@ EGLBoolean makeCurrent(struct OSD_T *osd)
 	return eglMakeCurrent(osd->eglDisplay, osd->finalSurface, osd->finalSurface, osd->context);
 }
 
-struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour, void (*doPaint)(struct OSD_T *osd))
+struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fill_colour, void (*doPaint)(struct OSD_T *osd, void *opaque))
 {
 	logInfo(LOG_OSD, "osdCreate start.\n");
 
@@ -177,7 +220,9 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 	logInfo(LOG_OSD, "width=%d, height=%d\n", width, height);
 
 
-	result->dispman_display = vc_dispmanx_display_open(0 /* LCD */);
+	result->dispman_display = initializeDispmanxDisplay();
+
+//	result->dispman_display = vc_dispmanx_display_open(0 /* LCD */);
 	if (result->dispman_display == DISPMANX_NO_HANDLE) {
 		logInfo(LOG_OSD, "Could not vc_dispmanx_display_open.\n");
 		return NULL;
@@ -218,14 +263,16 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 	}
 
 	// EGL init
-	result->eglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	result->eglDisplay = initializeEGL();
+
+//	result->eglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 	if (result->eglDisplay == EGL_NO_DISPLAY) {
 		EGLint egl_error = eglGetError();
 		showEGLErrorStr(egl_error, "eglGetDisplay");
 		return NULL;
 	}
 
-	EGLint egl_maj, egl_min;
+/*	EGLint egl_maj, egl_min;
 	EGLBoolean egl_ret;
 
 	egl_ret = eglInitialize(result->eglDisplay, &egl_maj, &egl_min);
@@ -236,7 +283,7 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 		return NULL;
 	}
 	logInfo(LOG_OSD, "eglVersion :egl_maj=%d, egl_min=%d\n", egl_maj, egl_min);
-
+*/
 	// get an appropriate EGL frame buffer configuration
 
 	EGLConfig config[1];
@@ -250,6 +297,8 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 	attribs[n++] = EGL_SURFACE_TYPE; 
 	attribs[n++] = EGL_WINDOW_BIT;
 	attribs[n] = EGL_NONE;
+
+	EGLBoolean egl_ret;
 
 	egl_ret = eglChooseConfig(result->eglDisplay, &attribs[0], config, 1, &num_config);
 	if ((egl_ret == EGL_FALSE) || (num_config == 0))
@@ -325,25 +374,15 @@ struct OSD_T *osdCreate(int layer, uint32_t width, uint32_t height, uint32_t fil
 
 void osdDestroy(struct OSD_T *osd)
 {
-	// destroy egl
-	if ((osd) && (osd->eglDisplay != EGL_NO_DISPLAY)) {
-		EGLBoolean egl_ret;
+	// If visible hide
+	if (osd->visible == 1) {
+		osdHide(osd);
+	}
 
-		egl_ret = eglMakeCurrent(osd->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-		if (egl_ret != EGL_TRUE) {
-			EGLint egl_error = eglGetError();
-			showEGLErrorStr(egl_error, "eglMakeCurrent");
-		}
-
-		egl_ret = eglTerminate(osd->eglDisplay);
-		if (egl_ret != EGL_TRUE) {
-			EGLint egl_error = eglGetError();
-			showEGLErrorStr(egl_error, "eglTerminate");
-		}
-
-		osd->eglDisplay = EGL_NO_DISPLAY;
-		osd->context = EGL_NO_CONTEXT;
-		osd->finalSurface = EGL_NO_SURFACE;
+	if (osd) {
+		vgDestroyPath(osd->path);
+		vgDestroyPaint(osd->fillPaint);
+		vgDestroyPaint(osd->strokePaint);
 	}
 
 	// destroy winow.
@@ -358,15 +397,33 @@ void osdDestroy(struct OSD_T *osd)
 	}
 
 	if ((osd) && (osd->dispman_display != DISPMANX_NO_HANDLE)) {
-		vc_dispmanx_display_close(osd->dispman_display);
+		releaseDispmanxDisplay();
+//		vc_dispmanx_display_close(osd->dispman_display);
 
 		osd->dispman_display = DISPMANX_NO_HANDLE;
 	}
 
+	// destroy egl
+	if ((osd) && (osd->eglDisplay != EGL_NO_DISPLAY)) {
+		EGLBoolean egl_ret;
+
+		egl_ret = eglDestroyContext(osd->eglDisplay, osd->context);
+		if (egl_ret != EGL_TRUE) {
+			EGLint egl_error = eglGetError();
+			showEGLErrorStr(egl_error, "eglDestroyContext");
+		}
+		osd->context = EGL_NO_CONTEXT;
+		egl_ret = eglDestroySurface(osd->eglDisplay, osd->finalSurface);
+		if (egl_ret != EGL_TRUE) {
+			EGLint egl_error = eglGetError();
+			showEGLErrorStr(egl_error, "eglDestroySurface");
+		}
+		osd->finalSurface = EGL_NO_SURFACE;
+
+		releaseEGL();
+	}
+
 	if (osd) {
-		vgDestroyPath(osd->path);
-		vgDestroyPaint(osd->fillPaint);
-		vgDestroyPaint(osd->strokePaint);
 		free(osd);
 	}
 	logInfo(LOG_OSD, "osdDestroy end.\n");
@@ -463,7 +520,7 @@ void osdClear(struct OSD_T *osd)
 	vgClear(0, 0, osd->width, osd->width);
 }
 
-void osdPaint(struct OSD_T *osd)
+void osdPaint(struct OSD_T *osd, void *opaque)
 {
 	if (osd == NULL) return;
 
@@ -477,7 +534,7 @@ void osdPaint(struct OSD_T *osd)
 
 	osdClear(osd);
 
-	osd->doPaint(osd);
+	osd->doPaint(osd, opaque);
 
 	vgFinish();
 	logInfo(LOG_OSD, "vgFinish.\n");
@@ -492,28 +549,28 @@ void osdPaint(struct OSD_T *osd)
 
 }
 
-void osdShow(struct OSD_T *osd)
+void osdShow(struct OSD_T *osd, void *opaque)
 {
 	if ((osd == NULL) || (osd->visible == 1)) return;
 
-	osdPaint(osd);
+	osdPaint(osd, opaque);
 	osd->visible = 1;
 }
 
 // Timeout in microseconds
-void osdShowWithTimeoutMicroseconds(struct OSD_T *osd, uint64_t timeout)
+void osdShowWithTimeoutMicroseconds(struct OSD_T *osd, uint64_t timeout, void *opaque)
 {
 	osd->timeout = timeout;
 	osd->startTime = nowInMicroseconds();
-	osdShow(osd);
+	osdShow(osd, opaque);
 }
 
 // Timeout in Seconds
-void osdShowWithTimeoutSeconds(struct OSD_T *osd, uint64_t timeout)
+void osdShowWithTimeoutSeconds(struct OSD_T *osd, uint64_t timeout, void *opaque)
 {
 	osd->timeout = timeout * 1000000;
 	osd->startTime = nowInMicroseconds();
-	osdShow(osd);
+	osdShow(osd, opaque);
 }
 
 void osdHide(struct OSD_T *osd)
